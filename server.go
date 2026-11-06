@@ -234,7 +234,7 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	if ok {
 		if p, err := s.person(r.Context(), sess.AccountID, personTTL); err == nil {
-			v.Acct = p.Username
+			v.Acct, v.CSRF = p.Username, sess.CSRF
 		}
 	}
 	for _, c := range s.clients {

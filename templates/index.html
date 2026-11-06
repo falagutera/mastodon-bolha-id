@@ -4,6 +4,7 @@
 <p>{{printf .T.how .Domain}}</p>
 <p>{{printf .T.who .Domain}}</p>
 {{if .Acct}}<form method="post" action="/logout" class="session">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
   <span>{{printf .T.signed_in_as .Acct}}</span> <button type="submit" class="link">{{.T.logout}}</button>
 </form>
 {{end}}<section>

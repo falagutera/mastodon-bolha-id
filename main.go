@@ -71,7 +71,7 @@ func secretEnv(key string) (string, error) {
 		return v, nil
 	}
 	if path := os.Getenv(key + "_FILE"); path != "" {
-		b, err := os.ReadFile(path)
+		b, err := os.ReadFile(path) // #nosec G304 G703 -- path set by the operator (env), not by requests
 		if err != nil {
 			return "", fmt.Errorf("%s_FILE: %w", key, err)
 		}

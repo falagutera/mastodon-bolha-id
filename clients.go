@@ -34,7 +34,7 @@ const minSecretLen = 32
 type clientList map[string]*client
 
 func loadClients(path string) (clientList, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path set by the operator (ID_CLIENTS_FILE)
 	if err != nil {
 		return nil, err
 	}

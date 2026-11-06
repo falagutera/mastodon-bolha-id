@@ -540,12 +540,16 @@ func TestRotationFailureKeepsToken(t *testing.T) {
 	}
 }
 
-// 4. RP-initiated logout with a valid id_token_hint and no session here still
-// revokes the account's tokens; a forged hint revokes nothing.
+// 4. RP-initiated logout with a valid id_token_hint and no session here revokes
+// only the hint's own token family (its sid); a forged or too-old hint revokes
+// nothing.
 func TestLogoutHintWithoutSession(t *testing.T) {
 	e := newTestEnv(t)
-	tok := e.signIn(e.browser())
+	b := e.browser()
+	tok := e.signIn(b)
+	other := e.signInOther(b)
 	hint := tok["id_token"].(string)
+
 	parts := strings.Split(hint, ".")
 	forged := parts[0] + "." + b64([]byte(`{"iss":"`+e.app.URL+`","sub":"109","aud":"tool"}`)) + "." + parts[2]
 	e.get(e.browser(), "/logout", url.Values{"id_token_hint": {forged}})
@@ -553,11 +557,60 @@ func TestLogoutHintWithoutSession(t *testing.T) {
 		t.Fatalf("forged hint revoked tokens: %d", st)
 	}
 	tok = e.signIn(e.browser())
-	e.get(e.browser(), "/logout", url.Values{"id_token_hint": {tok["id_token"].(string)}})
-	if st, _ := e.refresh(tok["refresh_token"]); st != 400 {
+	claims := e.verifyIDToken(tok["id_token"].(string))
+	sid, _ := claims["sid"].(string)
+	if sid == "" {
+		t.Fatalf("no sid: %v", claims)
+	}
+
+	// A validly signed hint older than the refresh TTL revokes nothing.
+	old, err := e.s.keys.sign(idClaims{Iss: e.app.URL, Sub: "109", Aud: "tool", Sid: sid,
+		Iat: time.Now().Add(-e.s.cfg.refreshTTL - time.Hour).Unix(), Exp: time.Now().Add(-e.s.cfg.refreshTTL).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.get(e.browser(), "/logout", url.Values{"id_token_hint": {old}})
+	st, tok2 := e.refresh(tok["refresh_token"])
+	if st != 200 {
+		t.Fatalf("too-old hint revoked tokens: %d", st)
+	}
+	// The sid stays the same on refresh-issued id_tokens.
+	if c := e.verifyIDToken(tok2["id_token"].(string)); c["sid"] != sid {
+		t.Fatalf("sid changed on refresh: %v -> %v", sid, c["sid"])
+	}
+
+	e.get(e.browser(), "/logout", url.Values{"id_token_hint": {tok2["id_token"].(string)}})
+	if st, _ := e.refresh(tok2["refresh_token"]); st != 400 {
 		t.Fatalf("refresh after hint logout: %d", st)
 	}
-	if st, _ := e.userinfo(tok["access_token"].(string)); st != 401 {
+	if st, _ := e.userinfo(tok2["access_token"].(string)); st != 401 {
 		t.Fatalf("userinfo after hint logout: %d", st)
+	}
+	// Other families of the same account keep working.
+	st, out := e.token(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {other["refresh_token"].(string)}}, "other", testSecret+"x")
+	if st != 200 {
+		t.Fatalf("other client's family revoked by a hint logout: %d %v", st, out)
+	}
+	if st, _ := e.refresh(e.signIn(e.browser())["refresh_token"]); st != 200 {
+		t.Fatal("another family of the same client was revoked")
+	}
+}
+
+// The sign-out button on the home page carries the session's CSRF token, so it
+// signs out in one step.
+func TestIndexSignOutForm(t *testing.T) {
+	e := newTestEnv(t)
+	b := e.browser()
+	tok := e.signIn(b)
+	_, page := e.get(b, "/", nil)
+	m := hiddenRe.FindStringSubmatch(page)
+	if m == nil || m[1] != "csrf" {
+		t.Fatalf("no csrf in the home page sign-out form:\n%s", page)
+	}
+	if resp := e.postLogout(b, url.Values{"csrf": {m[2]}}, "same-origin"); resp.StatusCode != 200 {
+		t.Fatalf("sign-out: %d", resp.StatusCode)
+	}
+	if st, _ := e.userinfo(tok["access_token"].(string)); st != 401 {
+		t.Fatalf("still signed in after the home page sign-out: %d", st)
 	}
 }

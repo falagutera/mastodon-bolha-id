@@ -517,7 +517,7 @@ func (s *server) mintTokens(ctx context.Context, c *client, g grant, p person) (
 	resp = tokenResponse{AccessToken: access, TokenType: "Bearer", ExpiresIn: int(accessTTL.Seconds()), Scope: strings.Join(g.Scopes, " ")}
 	if slices.Contains(g.Scopes, "openid") {
 		claims := idClaims{Iss: s.cfg.issuer, Sub: p.ID, Aud: c.ID, Exp: now.Add(idTokenTTL).Unix(), Iat: now.Unix(),
-			AuthTime: g.AuthTime, Nonce: g.Nonce, userClaims: s.claimsOf(p, g.Scopes)}
+			AuthTime: g.AuthTime, Nonce: g.Nonce, Sid: g.Family, userClaims: s.claimsOf(p, g.Scopes)}
 		if resp.IDToken, err = s.keys.sign(claims); err != nil {
 			return resp, keys, fmt.Errorf("%w: %v", errSign, err)
 		}
@@ -581,7 +581,7 @@ func (s *server) handleUserinfo(w http.ResponseWriter, r *http.Request) {
 	token, found := bearer(r)
 	if !found && r.Method == http.MethodPost {
 		r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-		if err := r.ParseForm(); err == nil {
+		if err := r.ParseForm(); err == nil { // #nosec G120 -- body bounded by MaxBytesReader just above
 			token = r.PostForm.Get("access_token")
 		}
 	}
@@ -656,14 +656,17 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	clientID := r.Form.Get("client_id")
 	hintOK := true
-	hintSub := "" // the account of a valid id_token_hint
-	if hint := r.Form.Get("id_token_hint"); hint != "" {
+	var hint idClaims // a valid id_token_hint
+	if raw := r.Form.Get("id_token_hint"); raw != "" {
 		var claims idClaims
-		if err := s.keys.verify(hint, &claims); err != nil || claims.Iss != s.cfg.issuer ||
+		// Expired hints are accepted, as OpenID Connect asks, but not ones older
+		// than any token they could still stand for.
+		if err := s.keys.verify(raw, &claims); err != nil || claims.Iss != s.cfg.issuer ||
+			claims.Iat < s.now().Add(-s.cfg.refreshTTL).Unix() ||
 			(clientID != "" && clientID != claims.Aud) || (ok && claims.Sub != sess.AccountID) {
 			hintOK = false
 		} else {
-			clientID, hintSub = claims.Aud, claims.Sub
+			clientID, hint = claims.Aud, claims
 		}
 	}
 	c := s.clients[clientID]
@@ -702,13 +705,14 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.clearCookie(w, sessionCookie)
 		// RP-initiated logout without a session here: a valid id_token_hint of a
-		// registered client (only RPs hold id_tokens) still revokes the
-		// account's tokens, as a session logout does.
-		if hintSub != "" && c != nil {
-			if err := s.revokeAccount(ctx, hintSub); err != nil {
-				log.Printf("logout: revoke tokens: %v", err)
+		// registered client revokes only the token family it was issued in (its
+		// sid). An id_token can leak from an RP's cookies or storage, so it must
+		// not be able to sign the person out of every other tool.
+		if hint.Sid != "" && hint.Sub != "" && c != nil && hint.Aud == c.ID {
+			if err := s.revokeFamily(ctx, hint.Sid); err != nil {
+				log.Printf("logout: revoke family: %v", err)
 			}
-			s.auditLog(ctx, auditEntry{AccountID: hintSub, ClientID: c.ID, Event: "logout", Detail: "id_token_hint"})
+			s.auditLog(ctx, auditEntry{AccountID: hint.Sub, ClientID: c.ID, Event: "logout", Detail: "id_token_hint"})
 		}
 	}
 	if target != "" && hintOK && c != nil && c.allowsLogoutRedirect(target) {
@@ -718,7 +722,8 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 			q.Set("state", st)
 		}
 		u.RawQuery = q.Encode()
-		http.Redirect(w, r, u.String(), http.StatusSeeOther)
+		// Only a post_logout_redirect_uri registered for the client gets here.
+		http.Redirect(w, r, u.String(), http.StatusSeeOther) // nosemgrep: go.lang.security.injection.open-redirect.open-redirect
 		return
 	}
 	s.render(w, "logout.html", http.StatusOK, s.view(r, lang))

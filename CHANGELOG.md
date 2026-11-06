@@ -14,7 +14,8 @@ First version.
 - Short session here (2 hours by default), so a second tool doesn't ask to sign in on the instance again.
 - Optional refresh tokens (`offline_access`), single use and rotated. A replayed refresh token or authorization code revokes every token that came from the same code; signing out revokes the account's tokens.
 - Refresh is rate limited per account and client and per client, keeps the refresh token when the instance fails, and stores the new tokens before consuming the old one; account lookups are cached and shared between concurrent requests.
-- Sign-out with a valid `id_token_hint` revokes the account's tokens even without a session here.
+- `sid` claim (the token family) in `id_token`s; sign-out with only a valid `id_token_hint` revokes just that family, and hints older than the refresh token lifetime are refused.
+- Before release: independent security code review, two automated penetration test runs (Strix) and per-commit automated reviews; every finding fixed with a regression test. The README explains how the app is tested.
 - `groups`/`role` claims only from an explicit mapping of instance role ids (`ID_ROLE_GROUPS`).
 - Safer defaults: confidential clients need PKCE or a nonce, http loopback redirects only for `dev` clients, database TLS required, Redis password required.
 - Audit log of sign-ins, consents, refusals and sign-outs, without tokens, with bounded and cleaned fields.

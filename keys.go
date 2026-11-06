@@ -201,6 +201,9 @@ type idClaims struct {
 	Iat      int64  `json:"iat"`
 	AuthTime int64  `json:"auth_time"`
 	Nonce    string `json:"nonce,omitempty"`
+	// Sid is the token family: the same for every id_token of one sign-in at
+	// one client, refreshes included. A hint-only logout revokes just it.
+	Sid string `json:"sid,omitempty"`
 	userClaims
 }
 

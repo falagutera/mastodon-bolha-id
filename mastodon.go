@@ -62,7 +62,7 @@ func (m *mastodon) authorizeURL(state, verifier string, forceLogin bool) string 
 }
 
 func (m *mastodon) do(req *http.Request, out any) error {
-	resp, err := m.client.Do(req)
+	resp, err := m.client.Do(req) // #nosec G704 -- requests only go to the configured instance (ID_INSTANCE); ids are path-escaped
 	if err != nil {
 		return err
 	}

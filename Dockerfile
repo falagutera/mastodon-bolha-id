@@ -14,6 +14,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.build=${BUILD}" -o 
 # distroless static: no shell, ca-certs + a nonroot user, tiny.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /id /id
+# Already the image default; explicit so scanners and runtimes see it.
+USER nonroot:nonroot
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD ["/id", "-healthcheck"]
 ENTRYPOINT ["/id"]

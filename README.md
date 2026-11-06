@@ -13,6 +13,34 @@ It exists because Mastodon is an OAuth 2 server but not an OpenID Connect provid
 - Audit log of sign-ins, consents, refusals and sign-outs, without tokens
 - Stateless replicas: everything lives in Redis and PostgreSQL
 
+## Testing and security
+
+This app decides who gets into other tools, so it is tested and reviewed as a security component. What is done today (2026-11-06):
+
+**Every pipeline.** GitLab CI ([`.gitlab-ci.yml`](.gitlab-ci.yml), plus the shared security stage from `open/gcn/ci-templates`, file `security.yml`) runs on every push. The test job runs on every pipeline; the security stage runs on every merge request and every push to `main`; the image is built and published only from `main`.
+
+- Blocking (the pipeline fails and no image is published):
+  - `go vet`, a `gofmt` check, and the full test suite against real PostgreSQL 17 and Redis 7.4 services;
+  - `govulncheck`: known vulnerabilities in Go code paths this app actually reaches;
+  - `gitleaks`: secrets committed to the repository;
+  - `trivy`: critical vulnerabilities that have a fix, secrets and misconfigurations in the repository.
+- Informative (reported, not blocking): `semgrep`, `gosec`, `hadolint` (Dockerfile), `yamllint`, and `poutine` (security of the CI pipeline itself). At 0.1.0 they report nothing at the thresholds the pipeline uses; the few `gosec`/`semgrep` false positives are annotated in the code with the reason.
+
+**The test suite.** 43 tests, all run with the race detector (`go test -race`). Most run the real HTTP handlers end to end against a fake Mastodon server, PostgreSQL and Redis:
+
+- the full OpenID Connect flow: authorize, sign-in on the instance, consent, token, `id_token` signature checked against the published JWKS, userinfo, and that the person's Mastodon token is revoked;
+- redirect URIs: exact match only, and errors before validation never redirect;
+- PKCE (S256 only, exact length, wrong or missing verifier), client authentication (wrong secret, another client's code, both methods at once), single-use codes;
+- consent and sign-out forms: CSRF token, same-origin check, form reused from another browser;
+- account status: suspended, disabled, unapproved, unconfirmed, remote, deleted and silenced accounts, at sign-in, refresh and userinfo;
+- token families: replayed codes and refresh tokens revoke their family, sign-out revokes the account's tokens, a hint-only sign-out revokes only its own family, rotation that fails halfway keeps the old token;
+- rate limits and failures of the instance or of Redis (the refresh token survives, the limiter doesn't fail open, concurrent lookups share one admin call);
+- signing keys: rotation, forged payloads, `alg: none`, short keys; configuration and clients-file validation; translations; release notes.
+
+**Reviews before the first release.** An independent security code review against OpenID Connect Core, the OAuth 2.0 Security Best Current Practice (RFC 9700) and OWASP ASVS; two automated white-box penetration test runs with [Strix](https://github.com/usestrix/strix); and an automated review of each security-relevant commit. Every finding was fixed with a regression test (most are in `security_test.go`). The fixes are listed in the 0.1.0 entry of the [CHANGELOG](CHANGELOG.md) and in the commit history. These were done by the project, not by an outside auditor, and they don't certify anything: they are what we checked.
+
+**Reporting a vulnerability.** Write to contato@gutocarvalho.net. Please don't open a public issue for it.
+
 ## How it works
 
 ```
@@ -70,6 +98,7 @@ The person's Mastodon token is revoked as soon as the account id is known. The a
 | `email`, `email_verified` | `email` | The account's e-mail; always confirmed, since unconfirmed accounts are refused |
 | `groups`, `role` | `profile` or `groups` | A group name from `ID_ROLE_GROUPS`, keyed by the Mastodon role id (for example `admin`, `moderator`). Roles not in the mapping produce no claim; raw role names are never sent |
 | `auth_time`, `nonce` | `id_token` | When the round trip through the instance happened (see the security notes); the client's nonce |
+| `sid` | `id_token` | The token family: the same for every `id_token` of one sign-in at one client, refreshes included. Sent back as `id_token_hint` at logout |
 
 Supported scopes: `openid` (required), `profile`, `email`, `groups`, `offline_access`. Others are ignored. `prompt=none|login|consent`, `max_age` and `ui_locales` are honored. Request objects are not supported.
 
@@ -188,7 +217,7 @@ Losing Redis signs everyone out of this app and invalidates outstanding tokens a
 - Every code starts a token family; its access and refresh tokens carry it. A code redeemed twice, or a rotated refresh token presented again, revokes the whole family (RFC 6749 4.1.2, RFC 9700 4.14.2): its live tokens are deleted and userinfo and refresh refuse the family from then on. Two refreshes of the same token racing each other: one wins, the other gets `invalid_grant` without revoking anything.
 - Refresh looks the token up without consuming it, checks the client, the family, a rate limit (30/min per account and client, so one looping tool can't block the person's other tools; 600/min per client; `429 slow_down` with `Retry-After`) and the account. Then it stores the successor tokens first and only after that consumes the old one (atomically marking it used): a failure while storing leaves the old token valid and unmarked, so the client's retry isn't taken for reuse. If the consume loses a race, the successors are deleted. The limiter is a Lua script (INCR, expiry set on the first hit and repaired if missing), works on any Redis version, and refuses the request (503) when Redis fails instead of letting it through. When the instance fails (5xx, timeout, a 429 of its own, a 404 that isn't Mastodon's JSON), the answer is `503 temporarily_unavailable` with `Retry-After` and the refresh token still works. A 429 from the instance is logged as such.
 - Account status lookups go through one shared cache: concurrent lookups for an account, on any replica, make one admin API call (a Redis lock). An account the instance says doesn't exist (Mastodon's JSON 404) is cached for a minute, so tokens of a deleted account don't hit the admin API on every request.
-- Signing out here (`/logout` with a session) revokes every token family of the account, so refresh tokens and access tokens stop working in every tool. RP-initiated logout with a valid `id_token_hint` (signature, issuer, `aud` a registered client) does the same for the hint's `sub` even when there is no session here (id_tokens are only held by tools), and is audited as `logout` with detail `id_token_hint`.
+- Signing out here (`/logout` with a session) revokes every token family of the account, so refresh tokens and access tokens stop working in every tool. RP-initiated logout with a valid `id_token_hint` (signature, issuer, `aud` a registered client, issued within the refresh token lifetime) and no session here revokes only the hint's own token family (its `sid`), audited as `logout` with detail `id_token_hint`. An `id_token` can leak from a tool's cookies or browser storage and an expired one is still accepted as a hint, so on its own it must not be able to sign the person out of every other tool.
 - Authorization responses carry `iss` (RFC 9207).
 - The account is checked at every authorization (cache of at most 5 minutes), at userinfo, and directly with the instance at every refresh.
 - Strict CSP (`default-src 'none'`, no inline script or style). The consent page allows the client's redirect origin in `form-action`, because browsers check it across the redirect.

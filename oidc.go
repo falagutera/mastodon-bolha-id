@@ -16,7 +16,7 @@ var (
 	pkcePattern     = regexp.MustCompile(`^[A-Za-z0-9._~-]{43,128}$`) // verifier
 	challengeRe     = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)       // S256: 32 bytes, base64url
 	singleParams    = []string{"client_id", "redirect_uri", "response_type", "scope", "state", "nonce", "code_challenge", "code_challenge_method", "prompt", "max_age", "ui_locales"}
-	claimsSupported = []string{"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "preferred_username", "name", "picture", "profile", "email", "email_verified", "groups", "role"}
+	claimsSupported = []string{"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "sid", "preferred_username", "name", "picture", "profile", "email", "email_verified", "groups", "role"}
 )
 
 const (
