@@ -1,0 +1,35 @@
+{{define "head"}}<!doctype html>
+<html lang="{{.T.lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>{{.T.title}} · {{.Domain}}</title>
+<link rel="stylesheet" href="/assets/artefatos.css">
+<link rel="stylesheet" href="/assets/id.css">
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="topbar">
+    <a class="eyebrow" href="/">{{.T.title}} · {{.Domain}}</a>
+    <span class="toplinks">
+    <a class="notes-link{{if eq .Nav "notes"}} on{{end}}" href="/release-notes"{{if eq .Nav "notes"}} aria-current="page"{{end}}>{{.T.nav_notes}}</a>
+    <span class="langsel" role="group" aria-label="{{.T.language}}">
+      <a href="/?lang=pt" hreflang="pt-BR"{{if eq .T.lang "pt-BR"}} class="on" aria-current="true"{{end}}>PT</a>
+      <a href="/?lang=en" hreflang="en"{{if eq .T.lang "en"}} class="on" aria-current="true"{{end}}>EN</a>
+    </span>
+    </span>
+  </div>
+</header>
+<main>
+{{end}}
+{{define "foot"}}</main>
+<footer class="foot">
+  <a href="https://gitlab.gutocarvalho.net/open/bolha/id">{{.T.source}}</a>
+  <a class="version" href="https://gitlab.gutocarvalho.net/images/id/container_registry">id {{.Version}}</a>
+</footer>
+</div>
+</body>
+</html>
+{{end}}

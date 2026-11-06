@@ -1,0 +1,19 @@
+# --- build -------------------------------------------------------------------
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum VERSION ./
+RUN go mod download
+COPY *.go CHANGELOG.md ./
+COPY internal ./internal
+COPY templates ./templates
+COPY assets ./assets
+ARG BUILD=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.build=${BUILD}" -o /id .
+
+# --- runtime -----------------------------------------------------------------
+# distroless static: no shell, ca-certs + a nonroot user, tiny.
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /id /id
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD ["/id", "-healthcheck"]
+ENTRYPOINT ["/id"]

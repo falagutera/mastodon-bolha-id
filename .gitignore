@@ -1,0 +1,6 @@
+.env
+postgres.env
+data/
+/id
+clients.json
+*.pem

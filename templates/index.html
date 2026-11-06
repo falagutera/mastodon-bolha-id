@@ -1,0 +1,14 @@
+{{template "head" .}}
+<h1>{{.T.title}} · {{.Domain}}</h1>
+<p class="lede">{{printf .T.lede .Domain}}</p>
+<p>{{printf .T.how .Domain}}</p>
+<p>{{printf .T.who .Domain}}</p>
+{{if .Acct}}<form method="post" action="/logout" class="session">
+  <span>{{printf .T.signed_in_as .Acct}}</span> <button type="submit" class="link">{{.T.logout}}</button>
+</form>
+{{end}}<section>
+<h2>{{.T.clients}}</h2>
+{{if .Clients}}<ul class="clients">{{range .Clients}}<li>{{.}}</li>{{end}}</ul>{{else}}<p class="note">{{.T.no_clients}}</p>{{end}}
+</section>
+<p class="note">{{.T.privacy}}</p>
+{{template "foot" .}}

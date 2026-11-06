@@ -1,0 +1,13 @@
+{{template "head" .}}
+<h1>{{.T.consent_title}}</h1>
+<p class="lede">{{printf .T.consent_lede .ClientName .Acct .Domain}}</p>
+<p>{{.T.consent_shares}}</p>
+<ul class="shares">{{range .Shares}}<li>{{.}}</li>{{end}}</ul>
+<form method="post" action="/consent" class="consent">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <input type="hidden" name="request" value="{{.RequestID}}">
+  <button type="submit" name="decision" value="allow">{{.T.allow}}</button>
+  <button type="submit" name="decision" value="deny" class="secondary">{{.T.deny}}</button>
+</form>
+<p class="note">{{.T.consent_note}}</p>
+{{template "foot" .}}
