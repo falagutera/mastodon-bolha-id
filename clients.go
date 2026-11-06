@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"slices"
@@ -19,10 +20,13 @@ type client struct {
 	Name string `json:"name"`
 	// Confidential clients authenticate at /token with one of these: the
 	// SHA-256 (hex) of the secret, or the name of an env var that holds it.
-	SecretSHA256           string   `json:"secret_sha256,omitempty"`
-	SecretEnv              string   `json:"secret_env,omitempty"`
-	Public                 bool     `json:"public,omitempty"` // no secret, PKCE S256 required
-	Dev                    bool     `json:"dev,omitempty"`    // allows http://localhost redirect URIs
+	SecretSHA256 string `json:"secret_sha256,omitempty"`
+	SecretEnv    string `json:"secret_env,omitempty"`
+	Public       bool   `json:"public,omitempty"` // no secret, PKCE S256 required
+	Dev          bool   `json:"dev,omitempty"`    // allows http://localhost redirect URIs
+	// AllowNoPKCEOrNonce lets a confidential client whose library sends neither
+	// PKCE nor a nonce (only state) sign in. Remove it once the client supports PKCE.
+	AllowNoPKCEOrNonce     bool     `json:"allow_no_pkce_or_nonce,omitempty"`
 	RedirectURIs           []string `json:"redirect_uris"`
 	PostLogoutRedirectURIs []string `json:"post_logout_redirect_uris,omitempty"`
 
@@ -67,6 +71,8 @@ func parseClients(data []byte, getenv func(string) string) (clientList, error) {
 			}
 		}
 		switch {
+		case c.Public && c.AllowNoPKCEOrNonce:
+			return nil, fmt.Errorf("client %q: allow_no_pkce_or_nonce is only for confidential clients; a public client must use PKCE", c.ID)
 		case c.Public && (c.SecretSHA256 != "" || c.SecretEnv != ""):
 			return nil, fmt.Errorf("client %q: a public client has no secret", c.ID)
 		case c.Public:
@@ -87,6 +93,9 @@ func parseClients(data []byte, getenv func(string) string) (clientList, error) {
 			c.secretHash = sum[:]
 		default:
 			return nil, fmt.Errorf("client %q: a confidential client needs secret_sha256 or secret_env (or set public)", c.ID)
+		}
+		if c.AllowNoPKCEOrNonce {
+			log.Printf("warning: client %q has allow_no_pkce_or_nonce: its codes aren't bound to PKCE or a nonce; remove it once the client supports PKCE", c.ID)
 		}
 		out[c.ID] = c
 	}

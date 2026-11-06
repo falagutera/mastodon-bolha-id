@@ -614,3 +614,68 @@ func TestIndexSignOutForm(t *testing.T) {
 		t.Fatalf("still signed in after the home page sign-out: %d", st)
 	}
 }
+
+// --- 0.1.1: legacy confidential clients ---------------------------------------
+
+// A confidential client with allow_no_pkce_or_nonce signs in with only state,
+// as passport-openidconnect 0.1.x does; duplicated scopes are fine.
+func TestLegacyClientWithoutPKCEOrNonce(t *testing.T) {
+	e := newTestEnv(t)
+	b := e.browser()
+	q := url.Values{"response_type": {"code"}, "client_id": {"legacy"}, "redirect_uri": {"https://legacy.example/cb"},
+		"scope": {"openid openid profile email groups"}, "state": {"st-legacy"}}
+	resp, page := e.get(b, "/authorize", q)
+	if resp.StatusCode != 200 {
+		t.Fatalf("legacy authorize: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	got := redirected(t, e.consent(b, page, "allow"), "https://legacy.example/cb")
+	if got.Get("state") != "st-legacy" || got.Get("code") == "" {
+		t.Fatalf("callback: %v", got)
+	}
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {got.Get("code")}, "redirect_uri": {"https://legacy.example/cb"}}
+	st, tok := e.token(form, "legacy", testSecret)
+	if st != 200 || tok["scope"] != "openid profile email groups" {
+		t.Fatalf("token: %d %v", st, tok)
+	}
+	if c := e.verifyIDToken(tok["id_token"].(string)); c["aud"] != "legacy" || c["nonce"] != nil || c["email"] != "ana@mail.example" {
+		t.Fatalf("id_token: %v", c)
+	}
+	// The code is still single use and bound to the redirect_uri and the secret.
+	if st, _ := e.token(form, "legacy", testSecret); st != 400 {
+		t.Fatalf("reused code: %d", st)
+	}
+	// What it does send is still enforced: a bad PKCE challenge is refused.
+	q.Set("code_challenge", "short")
+	q.Set("code_challenge_method", "S256")
+	resp, _ = e.get(b, "/authorize", q)
+	if g := redirected(t, resp, "https://legacy.example/cb"); g.Get("error") != "invalid_request" {
+		t.Fatalf("bad PKCE from the legacy client: %v", g)
+	}
+	// And a normal confidential client is still refused without PKCE or nonce.
+	q = url.Values{"response_type": {"code"}, "client_id": {"tool"}, "redirect_uri": {"https://client.example/cb"}, "scope": {"openid"}, "state": {"s"}}
+	resp, _ = e.get(b, "/authorize", q)
+	if g := redirected(t, resp, "https://client.example/cb"); g.Get("error") != "invalid_request" {
+		t.Fatalf("normal client without PKCE or nonce: %v", g)
+	}
+}
+
+func TestAllowNoPKCEOrNonceConfig(t *testing.T) {
+	public := `{"clients":[{"id":"a","name":"A","public":true,"allow_no_pkce_or_nonce":true,"redirect_uris":["https://a.example/cb"]}]}`
+	if _, err := parseClients([]byte(public), nil); err == nil {
+		t.Fatal("public client with allow_no_pkce_or_nonce accepted")
+	}
+	conf := `{"clients":[{"id":"a","name":"A","secret_sha256":"` + sha256hex(testSecret) + `","allow_no_pkce_or_nonce":true,"redirect_uris":["https://a.example/cb"]}]}`
+	cs, err := parseClients([]byte(conf), nil)
+	if err != nil || !cs["a"].AllowNoPKCEOrNonce {
+		t.Fatalf("confidential client with the flag: %v", err)
+	}
+	if cs, _ := parseClients([]byte(testClientsJSON), nil); cs["tool"].AllowNoPKCEOrNonce {
+		t.Fatal("flag on by default")
+	}
+}
+
+func TestDuplicateScopes(t *testing.T) {
+	if got := strings.Join(parseScopes("openid openid profile email groups email unknown"), " "); got != "openid profile email groups" {
+		t.Fatalf("scopes: %q", got)
+	}
+}

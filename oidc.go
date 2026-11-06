@@ -151,7 +151,7 @@ func (s *server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	case challenge == "" && c.Public:
 		fail("invalid_request", "PKCE (S256) is required")
 		return
-	case challenge == "" && req.Nonce == "":
+	case challenge == "" && req.Nonce == "" && !c.AllowNoPKCEOrNonce:
 		// A confidential client must bind the code to its own session somehow.
 		fail("invalid_request", "PKCE or nonce is required")
 		return

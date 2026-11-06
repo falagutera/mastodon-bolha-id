@@ -26,7 +26,7 @@ This app decides who gets into other tools, so it is tested and reviewed as a se
   - `trivy`: critical vulnerabilities that have a fix, secrets and misconfigurations in the repository.
 - Informative (reported, not blocking): `semgrep`, `gosec`, `hadolint` (Dockerfile), `yamllint`, and `poutine` (security of the CI pipeline itself). At 0.1.0 they report nothing at the thresholds the pipeline uses; the few `gosec`/`semgrep` false positives are annotated in the code with the reason.
 
-**The test suite.** 43 tests, all run with the race detector (`go test -race`). Most run the real HTTP handlers end to end against a fake Mastodon server, PostgreSQL and Redis:
+**The test suite.** 46 tests, all run with the race detector (`go test -race`). Most run the real HTTP handlers end to end against a fake Mastodon server, PostgreSQL and Redis:
 
 - the full OpenID Connect flow: authorize, sign-in on the instance, consent, token, `id_token` signature checked against the published JWKS, userinfo, and that the person's Mastodon token is revoked;
 - redirect URIs: exact match only, and errors before validation never redirect;
@@ -154,6 +154,7 @@ Clients are in a JSON file (a ConfigMap in k8s), loaded at startup. See `clients
   Generate secrets with `openssl rand -base64 32`. They are compared as SHA-256 hashes, so they must be random: don't use passwords.
 - `"public": true` for apps that can't keep a secret (SPAs, desktop). They must use PKCE S256.
 - Confidential clients must send a PKCE `code_challenge` (S256), a `nonce`, or both; a request with neither is refused. When they send a `code_challenge`, the verifier is required.
+- `"allow_no_pkce_or_nonce": true` (confidential clients only; refused on a public client at startup; off by default) lets a client sign in with neither, for RP libraries that only send `state`, such as passport-openidconnect 0.1.x (Overleaf). Whatever PKCE or nonce such a client does send is still checked. The app logs a warning at startup for each client that has it. Remove it as soon as the tool supports PKCE; see the security notes.
 - `post_logout_redirect_uris`: where `/logout` may send people back. Without it, logout shows a page here.
 
 Restart the app (roll the Deployment) after changing the file.
@@ -213,6 +214,7 @@ Losing Redis signs everyone out of this app and invalidates outstanding tokens a
 
 - Before the client and the exact redirect URI are validated, errors show a page here and never redirect.
 - The authorization request, the sign-in on the instance and the consent are each bound: a random `state` with a `__Host-` cookie for the instance round trip, and the session's CSRF token plus the account id for the consent form, which also requires `Sec-Fetch-Site: same-origin`.
+- Clients with `allow_no_pkce_or_nonce` lose the binding PKCE or a nonce gives between the code and the browser session that started the flow, so they are exposed to authorization code injection (RFC 9700 §4.5): someone who obtains a victim's code could try to redeem it in their own session at that tool. What still limits it: the code is redeemed only with the client's secret, only for the exact registered redirect URI, lives 60 seconds, works once and is bound to that client; and the tool checks `state`. It exists only for legacy RP libraries and should be removed once the tool supports PKCE.
 - Codes are single use (Redis `GETDEL`), even across replicas, and bound to the client, redirect URI, PKCE challenge (exactly 43 characters, S256) and nonce. A failed exchange burns the code.
 - Every code starts a token family; its access and refresh tokens carry it. A code redeemed twice, or a rotated refresh token presented again, revokes the whole family (RFC 6749 4.1.2, RFC 9700 4.14.2): its live tokens are deleted and userinfo and refresh refuse the family from then on. Two refreshes of the same token racing each other: one wins, the other gets `invalid_grant` without revoking anything.
 - Refresh looks the token up without consuming it, checks the client, the family, a rate limit (30/min per account and client, so one looping tool can't block the person's other tools; 600/min per client; `429 slow_down` with `Retry-After`) and the account. Then it stores the successor tokens first and only after that consumes the old one (atomically marking it used): a failure while storing leaves the old token valid and unmarked, so the client's retry isn't taken for reuse. If the consume loses a race, the successors are deleted. The limiter is a Lua script (INCR, expiry set on the first hit and repaired if missing), works on any Redis version, and refuses the request (503) when Redis fails instead of letting it through. When the instance fails (5xx, timeout, a 429 of its own, a 404 that isn't Mastodon's JSON), the answer is `503 temporarily_unavailable` with `Retry-After` and the refresh token still works. A 429 from the instance is logged as such.
