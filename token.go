@@ -113,6 +113,15 @@ func (s *server) track(ctx context.Context, family, accountID string, keys ...st
 	return err
 }
 
+// registerFamily puts a new family under its account, before any token of it exists.
+func (s *server) registerFamily(ctx context.Context, family, accountID string) error {
+	pipe := s.rdb.TxPipeline()
+	pipe.SAdd(ctx, accountFams+accountID, family)
+	pipe.Expire(ctx, accountFams+accountID, s.cfg.refreshTTL)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 // revokeFamily marks the family revoked (checked by userinfo and refresh) and
 // deletes its live tokens. The marker outlives every token of the family.
 func (s *server) revokeFamily(ctx context.Context, family string) error {
@@ -301,6 +310,16 @@ func (s *server) codeGrant(w http.ResponseWriter, r *http.Request, c *client) {
 	if g.Challenge != "" && (!pkcePattern.MatchString(verifier) || !equal(s256(verifier), g.Challenge)) ||
 		g.Challenge == "" && verifier != "" {
 		tokenFail(w, http.StatusBadRequest, "invalid_grant", "PKCE verification failed")
+		return
+	}
+	// Signed out between issuing and redeeming the code: its family is revoked.
+	if revoked, err := s.familyRevoked(ctx, g.Family); err != nil || revoked {
+		if err != nil {
+			log.Printf("token: %v", err)
+			upstreamFail(w)
+			return
+		}
+		tokenFail(w, http.StatusBadRequest, "invalid_grant", "revoked")
 		return
 	}
 	p, ok := s.tokenAccount(w, r, c, g, personTTL)

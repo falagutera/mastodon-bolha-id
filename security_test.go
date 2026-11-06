@@ -423,3 +423,21 @@ func TestAuditText(t *testing.T) {
 		t.Fatalf("length: %d", len([]rune(got)))
 	}
 }
+
+// A code issued before a sign-out can't be redeemed after it (Strix retest).
+func TestCodeIssuedBeforeLogout(t *testing.T) {
+	e := newTestEnv(t)
+	b := e.browser()
+	tok := e.signIn(b)
+	verifier := randomToken()
+	resp, page := e.get(b, "/authorize", authParams("tool", "https://client.example/cb", verifier, "openid profile offline_access"))
+	if resp.StatusCode == 200 {
+		resp = e.consent(b, page, "allow")
+	}
+	code := redirected(t, resp, "https://client.example/cb").Get("code")
+	e.get(b, "/logout", url.Values{"id_token_hint": {tok["id_token"].(string)}})
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {"https://client.example/cb"}, "code_verifier": {verifier}}
+	if st, _ := e.token(form, "tool", testSecret); st != 400 {
+		t.Fatalf("code redeemed after logout: %d", st)
+	}
+}

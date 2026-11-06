@@ -365,7 +365,13 @@ func (s *server) handleConsent(w http.ResponseWriter, r *http.Request) {
 func (s *server) issueCode(w http.ResponseWriter, r *http.Request, req authRequest, sess session, p person, status int) {
 	g := grant{ClientID: req.ClientID, AccountID: p.ID, Scopes: req.Scopes, AuthTime: sess.AuthTime,
 		RedirectURI: req.RedirectURI, Challenge: req.Challenge, Nonce: req.Nonce, Family: randomToken()}
-	code, err := s.kv.newSecret(r.Context(), codeKey, g, codeTTL)
+	// The family joins the account before the code exists, so a sign-out between
+	// issuing and redeeming the code revokes it too.
+	err := s.registerFamily(r.Context(), g.Family, p.ID)
+	var code string
+	if err == nil {
+		code, err = s.kv.newSecret(r.Context(), codeKey, g, codeTTL)
+	}
 	if err != nil {
 		log.Printf("code: %v", err)
 		s.renderErrorLang(w, r, http.StatusServiceUnavailable, "unavailable", req.Lang)
