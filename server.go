@@ -191,6 +191,11 @@ type viewData struct {
 	Shares     []string
 	RequestID  string
 	CSRF       string
+	// Logout confirmation page.
+	ClientID     string
+	LogoutTarget string
+	State        string
+	UILocales    string
 }
 
 func (s *server) view(r *http.Request, lang string) viewData {

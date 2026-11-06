@@ -589,6 +589,28 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	c := s.clients[clientID]
+	target := r.Form.Get("post_logout_redirect_uri")
+	// Ending the session revokes every token of the account, in every tool, so
+	// a plain link from another site must not do it: only an RP that proves the
+	// session with a matching id_token_hint, or the person confirming here with
+	// a same-origin POST carrying the session's CSRF token.
+	authenticated := ok && ((r.Form.Get("id_token_hint") != "" && hintOK) ||
+		(r.Method == http.MethodPost && sameSite(r) && equal(sess.CSRF, r.PostFormValue("csrf"))))
+	if ok && !authenticated {
+		v := s.view(r, lang)
+		v.CSRF, v.ClientID, v.LogoutTarget, v.State, v.UILocales = sess.CSRF, "", "", r.Form.Get("state"), r.Form.Get("ui_locales")
+		formAction := "'self'"
+		if c != nil {
+			v.ClientID = c.ID
+			if target != "" && c.allowsLogoutRedirect(target) {
+				v.LogoutTarget = target
+				formAction += " " + origin(target)
+			}
+		}
+		w.Header().Set("Content-Security-Policy", csp(formAction))
+		s.render(w, "logout_confirm.html", http.StatusOK, v)
+		return
+	}
 	if ok {
 		s.endSession(w, r, sess)
 		if err := s.revokeAccount(ctx, sess.AccountID); err != nil {
@@ -602,7 +624,6 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.clearCookie(w, sessionCookie)
 	}
-	target := r.Form.Get("post_logout_redirect_uri")
 	if target != "" && hintOK && c != nil && c.allowsLogoutRedirect(target) {
 		u, _ := url.Parse(target)
 		q := u.Query()

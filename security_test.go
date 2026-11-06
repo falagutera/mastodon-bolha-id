@@ -194,19 +194,63 @@ func TestCodeReplayRevokesFamily(t *testing.T) {
 	}
 }
 
-// 2. Signing out here revokes the account's refresh tokens.
+// 2. Signing out here revokes the account's refresh tokens, but only when the
+// person confirms on this site or the RP proves the session with an id_token_hint:
+// a plain link from another site must not revoke anything.
+func (e *testEnv) postLogout(b *http.Client, form url.Values, site string) *http.Response {
+	e.t.Helper()
+	req, _ := http.NewRequest("POST", e.app.URL+"/logout", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if site != "" {
+		req.Header.Set("Sec-Fetch-Site", site)
+	}
+	resp, err := b.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp
+}
+
 func TestLogoutRevokesRefreshTokens(t *testing.T) {
 	e := newTestEnv(t)
 	b := e.browser()
 	tok := e.signIn(b)
-	if resp, _ := e.get(b, "/logout", nil); resp.StatusCode != 200 {
-		t.Fatalf("logout: %d", resp.StatusCode)
+	resp, page := e.get(b, "/logout", nil)
+	if resp.StatusCode != 200 || !strings.Contains(page, `action="/logout"`) {
+		t.Fatalf("logout without proof should ask to confirm: %d", resp.StatusCode)
 	}
+	if st, _ := e.userinfo(tok["access_token"].(string)); st != 200 {
+		t.Fatalf("a plain GET revoked the tokens: %d", st)
+	}
+	m := hiddenRe.FindStringSubmatch(page)
+	if m == nil || m[1] != "csrf" {
+		t.Fatalf("no csrf in confirmation page:\n%s", page)
+	}
+	// A cross-site POST, or one without the right token, changes nothing.
+	e.postLogout(b, url.Values{"csrf": {m[2]}}, "cross-site")
+	e.postLogout(b, url.Values{"csrf": {"wrong"}}, "same-origin")
+	if st, _ := e.userinfo(tok["access_token"].(string)); st != 200 {
+		t.Fatalf("revoked without a valid confirmation: %d", st)
+	}
+	e.postLogout(b, url.Values{"csrf": {m[2]}}, "same-origin")
 	if st, _ := e.refresh(tok["refresh_token"]); st != 400 {
 		t.Fatalf("refresh after logout: %d", st)
 	}
 	if st, _ := e.userinfo(tok["access_token"].(string)); st != 401 {
 		t.Fatalf("userinfo after logout: %d", st)
+	}
+}
+
+func TestLogoutWithIDTokenHint(t *testing.T) {
+	e := newTestEnv(t)
+	b := e.browser()
+	tok := e.signIn(b)
+	if resp, page := e.get(b, "/logout", url.Values{"id_token_hint": {tok["id_token"].(string)}}); resp.StatusCode != 200 || strings.Contains(page, `action="/logout"`) {
+		t.Fatalf("logout with hint: %d", resp.StatusCode)
+	}
+	if st, _ := e.refresh(tok["refresh_token"]); st != 400 {
+		t.Fatalf("refresh after logout: %d", st)
 	}
 }
 
@@ -230,7 +274,15 @@ func TestLogoutAuditClientID(t *testing.T) {
 	e := newTestEnv(t)
 	b := e.browser()
 	e.signIn(b)
-	e.get(b, "/logout", url.Values{"client_id": {strings.Repeat("x\n", 30000)}})
+	_, page := e.get(b, "/logout", url.Values{"client_id": {strings.Repeat("x\n", 30000)}})
+	if strings.Contains(page, "xx") {
+		t.Fatal("unregistered client_id carried into the confirmation form")
+	}
+	m := hiddenRe.FindStringSubmatch(page)
+	// 10000 × "x%0A" stays under the 64 KiB form limit, so the logout really runs.
+	if resp := e.postLogout(b, url.Values{"csrf": {m[2]}, "client_id": {strings.Repeat("x\n", 10000)}}, "same-origin"); resp.StatusCode != 200 {
+		t.Fatalf("confirmed logout: %d", resp.StatusCode)
+	}
 	var client string
 	e.s.db.pool.QueryRow(context.Background(), `SELECT client_id FROM audit_log WHERE event = 'logout' ORDER BY id DESC LIMIT 1`).Scan(&client)
 	if client != "" {

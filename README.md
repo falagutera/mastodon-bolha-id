@@ -198,7 +198,7 @@ Losing Redis signs everyone out of this app and invalidates outstanding tokens a
 - Shared devices: the session here lasts 2 hours by default and signing out of a tool doesn't end it. Sign out at `/` (or the tool's logout, if it calls `/logout`).
 - `/authorize` stores a pending request in Redis before anyone signs in (10 minutes, `state` up to 512 and `nonce` up to 255 characters). Rate-limit `/authorize` at the edge, and run Redis with `maxmemory` plus `maxmemory-policy noeviction` (or `volatile-ttl`) and a memory alert, so a flood fails loudly instead of evicting sessions and token families.
 - Redis holds sessions and tokens (hashed), so it requires a password, and a NetworkPolicy should allow only the id pods to reach it.
-- `/logout` accepts GET without confirmation, as OpenID Connect RP-initiated logout does: another site can sign someone out of this app (not out of the tools).
+- `/logout` only ends the session (and revokes the account's tokens) when the request proves it: an `id_token_hint` issued to this session, or the person confirming on a page here (same-origin POST with the session's CSRF token). A plain link from another site only shows the confirmation page, so it can't sign anyone out.
 - Logging out here doesn't end the tools' own sessions; it does revoke the account's tokens issued here.
 
 ## Versions
