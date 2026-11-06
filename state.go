@@ -19,12 +19,25 @@ const (
 	accessKey  = "id:at:"
 	refreshKey = "id:rt:"
 	personKey  = "id:person:"
-	requestTTL = 10 * time.Minute
-	loginTTL   = 10 * time.Minute
-	codeTTL    = 60 * time.Second
-	accessTTL  = 10 * time.Minute
-	idTokenTTL = 10 * time.Minute
-	personTTL  = 5 * time.Minute
+	personLock = "id:lock:person:"
+	// Token families: every token that comes from one code shares a family, so
+	// a replayed code or refresh token can revoke all of them.
+	refreshUsed = "id:rtused:"   // hash of a rotated refresh token -> family
+	codeUsed    = "id:codeused:" // hash of a redeemed code -> family
+	familyRev   = "id:famrev:"   // family -> revoked marker
+	familyKeys  = "id:famkeys:"  // family -> set of its live token keys
+	accountFams = "id:acctfam:"  // account -> set of its families
+	rateKey     = "id:rl:"
+
+	requestTTL  = 10 * time.Minute
+	loginTTL    = 10 * time.Minute
+	codeTTL     = 60 * time.Second
+	codeUsedTTL = codeTTL + 5*time.Minute
+	accessTTL   = 10 * time.Minute
+	idTokenTTL  = 10 * time.Minute
+	personTTL   = 5 * time.Minute
+	missingTTL  = time.Minute // negative cache of an account the instance doesn't have
+	refreshAge  = time.Minute // account status age accepted on refresh
 )
 
 var errMissing = errors.New("not found or expired")
@@ -64,7 +77,8 @@ type grant struct {
 	AuthTime    int64    `json:"auth_time"`
 	RedirectURI string   `json:"redirect_uri,omitempty"` // codes only
 	Challenge   string   `json:"challenge,omitempty"`    // codes only
-	Nonce       string   `json:"nonce,omitempty"`        // codes and refresh
+	Nonce       string   `json:"nonce,omitempty"`        // codes only
+	Family      string   `json:"family"`
 }
 
 type kv struct{ rdb *redis.Client }

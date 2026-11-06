@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,6 +88,25 @@ type auditEntry struct {
 
 func (s *store) audit(ctx context.Context, e auditEntry) error {
 	_, err := s.pool.Exec(ctx, `INSERT INTO audit_log (account_id, acct, client_id, event, detail) VALUES ($1, $2, $3, $4, $5)`,
-		e.AccountID, e.Acct, e.ClientID, e.Event, e.Detail)
+		auditText(e.AccountID), auditText(e.Acct), auditText(e.ClientID), auditText(e.Event), auditText(e.Detail))
 	return err
+}
+
+const maxAuditField = 200
+
+// auditText drops control characters and bounds the length of a log field.
+func auditText(v string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range v {
+		if unicode.IsControl(r) || r == utf8.RuneError {
+			continue
+		}
+		if n == maxAuditField {
+			break
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
 }

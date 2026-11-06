@@ -8,8 +8,8 @@ It exists because Mastodon is an OAuth 2 server but not an OpenID Connect provid
 - `id_token` signed with RS256; two keys in the JWKS for rotation
 - Account status checked with the instance's admin API at every authorization and refresh: a suspended account loses access
 - Consent page in Portuguese and English the first time an account uses a tool; the choice is remembered
-- A 12-hour session here, so a second tool doesn't ask to sign in on the instance again
-- Optional refresh tokens (`offline_access`), single use and rotated
+- A short session here (2 hours by default), so a second tool doesn't ask to sign in on the instance again
+- Optional refresh tokens (`offline_access`), single use and rotated, with reuse detection: a replayed refresh token or code revokes every token that came from it
 - Audit log of sign-ins, consents, refusals and sign-outs, without tokens
 - Stateless replicas: everything lives in Redis and PostgreSQL
 
@@ -31,7 +31,7 @@ It exists because Mastodon is an OAuth 2 server but not an OpenID Connect provid
     |                       |-- GET /api/v1/admin/accounts/:id ---->|  service token:
     |                       |   approved? confirmed? not suspended? |  e-mail, role,
     |                       |   not disabled? local?                |  status
-    |                       |   -> session cookie here (12 h)       |
+    |                       |   -> session cookie here (2 h)        |
     |                       |                                       |
     |                       | consent page (first time per tool)    |
     |<-- redirect_uri?code&state&iss                                |
@@ -65,11 +65,11 @@ The person's Mastodon token is revoked as soon as the account id is known. The a
 
 | Claim | Scope | Value |
 |---|---|---|
-| `sub` | always | The Mastodon account id. Stable: the @ can change, the id can't |
+| `sub` | always | The Mastodon account id. Stable: the @ can change, the id can't. Tools must key accounts on `sub`, never on the e-mail or the username |
 | `preferred_username`, `name`, `picture`, `profile` | `profile` | Username, display name, avatar URL, profile URL |
 | `email`, `email_verified` | `email` | The account's e-mail; always confirmed, since unconfirmed accounts are refused |
-| `groups`, `role` | `profile` or `groups` | The instance role name, such as `Owner`, `Admin` or `Moderator`; absent for regular accounts |
-| `auth_time`, `nonce` | `id_token` | When the person signed in on the instance; the client's nonce |
+| `groups`, `role` | `profile` or `groups` | A group name from `ID_ROLE_GROUPS`, keyed by the Mastodon role id (for example `admin`, `moderator`). Roles not in the mapping produce no claim; raw role names are never sent |
+| `auth_time`, `nonce` | `id_token` | When the round trip through the instance happened (see the security notes); the client's nonce |
 
 Supported scopes: `openid` (required), `profile`, `email`, `groups`, `offline_access`. Others are ignored. `prompt=none|login|consent`, `max_age` and `ui_locales` are honored. Request objects are not supported.
 
@@ -87,16 +87,16 @@ All configuration is in environment variables. See `.env.example`.
 | `ID_SIGNING_KEY_PREVIOUS` or `ID_SIGNING_KEY_PREVIOUS_FILE` | no | | The key before the last rotation: only published in the JWKS |
 | `ID_CLIENTS_FILE` | yes | | Path of the clients JSON file |
 | `ID_DB_HOST`, `ID_DB_PASSWORD` | yes | | PostgreSQL |
-| `ID_DB_PORT`, `ID_DB_USER`, `ID_DB_NAME`, `ID_DB_SSLMODE` | no | `5432`, `id`, `id`, `prefer` | |
-| `ID_REDIS_ADDR` | yes | | `host:port` |
-| `ID_REDIS_PASSWORD` | no | | |
+| `ID_DB_PORT`, `ID_DB_USER`, `ID_DB_NAME`, `ID_DB_SSLMODE` | no | `5432`, `id`, `id`, `require` | Set `disable` only on a trusted local network |
+| `ID_REDIS_ADDR`, `ID_REDIS_PASSWORD` | yes | | `host:port` and its password. The app refuses to start without a password |
 | `ID_LISTEN` | no | `:8080` | |
 | `ID_LANG` | no | `pt-BR` | Page language when the browser doesn't say (`pt-BR` or `en`) |
 | `ID_ALLOW_SILENCED` | no | `true` | Whether silenced (limited) accounts can sign in |
-| `ID_SESSION_TTL` | no | `12h` | The session here; within it, tools don't send people to the instance again |
+| `ID_SESSION_TTL` | no | `2h` | The session here; within it, tools don't send people to the instance again. Kept short for shared devices: signing out of a tool doesn't end it |
+| `ID_ROLE_GROUPS` | no | none | JSON object from Mastodon role id to group name, such as `{"3":"admin","2":"moderator"}`. Role ids are in the instance's admin UI (Roles) or `GET /api/v1/admin/accounts/:id` |
 | `ID_REFRESH_TTL` | no | `720h` | Lifetime of a refresh token (each use gives a new one) |
 
-Fixed lifetimes: authorization code 60 s, access token and `id_token` 10 min, pending sign-in 10 min, account status cache 5 min.
+Fixed values: authorization code 60 s, access token and `id_token` 10 min, pending sign-in 10 min, account status cache 5 min (1 min on refresh, 1 min for "account doesn't exist"), 30 refreshes per minute per account and 600 per client.
 
 ## Registering a client
 
@@ -117,14 +117,14 @@ Clients are in a JSON file (a ConfigMap in k8s), loaded at startup. See `clients
 ```
 
 - `id`: the `client_id`. `name`: shown on the consent page.
-- `redirect_uris`: compared exactly, including the query. https only (http allowed on `localhost`/`127.0.0.1` for development). No fragments.
+- `redirect_uris`: compared exactly, including the query. https only; `http://localhost`/`127.0.0.1` only for a client with `"dev": true`. No fragments.
 - Confidential clients (the default) authenticate at `/token` with `client_secret_basic` or `client_secret_post`. Give the secret one of two ways:
   - `secret_env`: the name of an environment variable that holds it (a k8s Secret). At least 32 characters.
   - `secret_sha256`: the hex SHA-256 of the secret, so the file holds no secret. `printf %s "$SECRET" | sha256sum`.
   
   Generate secrets with `openssl rand -base64 32`. They are compared as SHA-256 hashes, so they must be random: don't use passwords.
 - `"public": true` for apps that can't keep a secret (SPAs, desktop). They must use PKCE S256.
-- Confidential clients may use PKCE too; when they send a `code_challenge`, the verifier is required.
+- Confidential clients must send a PKCE `code_challenge` (S256), a `nonce`, or both; a request with neither is refused. When they send a `code_challenge`, the verifier is required.
 - `post_logout_redirect_uris`: where `/logout` may send people back. Without it, logout shows a page here.
 
 Restart the app (roll the Deployment) after changing the file.
@@ -178,19 +178,28 @@ Losing Redis signs everyone out of this app and invalidates outstanding tokens a
 
 ### Audit log
 
-`audit_log` has one row per event: `login` (a code was issued to a client), `consent`, `deny`, `refused` (with the reason: `suspended`, `disabled`, `unapproved`, `unconfirmed`, `no_email`, `silenced`, `remote`, `gone`), `refresh` and `logout`. It holds the account id, username, client id and time. Never tokens, codes, secrets or IPs.
+`audit_log` has one row per event (fields are stripped of control characters and cut at 200 characters; `/logout` records the client id only when it is a registered client): `login` (a code was issued to a client), `consent`, `deny`, `refused` (with the reason: `suspended`, `disabled`, `unapproved`, `unconfirmed`, `no_email`, `silenced`, `remote`, `gone`), `refresh` and `logout`. It holds the account id, username, client id and time. Never tokens, codes, secrets or IPs.
 
 ## Security notes
 
 - Before the client and the exact redirect URI are validated, errors show a page here and never redirect.
 - The authorization request, the sign-in on the instance and the consent are each bound: a random `state` with a `__Host-` cookie for the instance round trip, and the session's CSRF token plus the account id for the consent form, which also requires `Sec-Fetch-Site: same-origin`.
-- Codes are single use (Redis `GETDEL`), even across replicas, and bound to the client, redirect URI, PKCE challenge and nonce. A failed exchange burns the code.
+- Codes are single use (Redis `GETDEL`), even across replicas, and bound to the client, redirect URI, PKCE challenge (exactly 43 characters, S256) and nonce. A failed exchange burns the code.
+- Every code starts a token family; its access and refresh tokens carry it. A code redeemed twice, or a rotated refresh token presented again, revokes the whole family (RFC 6749 4.1.2, RFC 9700 4.14.2): its live tokens are deleted and userinfo and refresh refuse the family from then on. Two refreshes of the same token racing each other: one wins, the other gets `invalid_grant` without revoking anything.
+- Refresh looks the token up without consuming it, checks the client, the family, a rate limit (30/min per account, 600/min per client, `429 slow_down` with `Retry-After`) and the account, and only then consumes and rotates it. When the instance fails (5xx, timeout, a 429 of its own, a 404 that isn't Mastodon's JSON), the answer is `503 temporarily_unavailable` with `Retry-After` and the refresh token still works. A 429 from the instance is logged as such.
+- Account status lookups go through one shared cache: concurrent lookups for an account, on any replica, make one admin API call (a Redis lock). An account the instance says doesn't exist (Mastodon's JSON 404) is cached for a minute, so tokens of a deleted account don't hit the admin API on every request.
+- Signing out here (`/logout` with a session) revokes every token family of the account, so refresh tokens and access tokens stop working in every tool.
 - Authorization responses carry `iss` (RFC 9207).
 - The account is checked at every authorization (cache of at most 5 minutes), at userinfo, and directly with the instance at every refresh.
 - Strict CSP (`default-src 'none'`, no inline script or style). The consent page allows the client's redirect origin in `form-action`, because browsers check it across the redirect.
 - Request bodies are capped at 64 KiB. Rate limiting is expected at the edge.
+- `prompt=login`, `select_account` and `max_age` send `force_login=true` to the instance, which ends the person's session on bolha.us itself (they sign in again there). This is Mastodon's behaviour and is kept on purpose.
+- `auth_time` is when the round trip through the instance happened. Without `force_login`, Mastodon may have reused its own session, so the password may have been typed earlier. Tools that need a recent sign-in should send `max_age`: that always forces a sign-in on the instance.
+- Shared devices: the session here lasts 2 hours by default and signing out of a tool doesn't end it. Sign out at `/` (or the tool's logout, if it calls `/logout`).
+- `/authorize` stores a pending request in Redis before anyone signs in (10 minutes, `state` up to 512 and `nonce` up to 255 characters). Rate-limit `/authorize` at the edge, and run Redis with `maxmemory` plus `maxmemory-policy noeviction` (or `volatile-ttl`) and a memory alert, so a flood fails loudly instead of evicting sessions and token families.
+- Redis holds sessions and tokens (hashed), so it requires a password, and a NetworkPolicy should allow only the id pods to reach it.
 - `/logout` accepts GET without confirmation, as OpenID Connect RP-initiated logout does: another site can sign someone out of this app (not out of the tools).
-- Logging out here doesn't end sessions in the tools, and outstanding refresh tokens stay valid until used (then the account is checked) or expired.
+- Logging out here doesn't end the tools' own sessions; it does revoke the account's tokens issued here.
 
 ## Versions
 
@@ -207,7 +216,9 @@ What changed in each version is in [CHANGELOG.md](CHANGELOG.md), served as `/rel
 ## Deploy notes
 
 - Run 2 or more replicas: there is no in-memory state.
-- Mount the clients file (ConfigMap) and the signing key (Secret, via `ID_SIGNING_KEY_FILE`); put the Mastodon secrets, the admin token and client secrets in Secrets.
+- Mount the clients file (ConfigMap) and the signing key (Secret, via `ID_SIGNING_KEY_FILE`); put the Mastodon secrets, the admin token, the Redis password and client secrets in Secrets.
+- Redis: password on, `maxmemory` with `noeviction` (or `volatile-ttl`) and a memory alert, and a NetworkPolicy so only the id pods reach it.
+- PostgreSQL over TLS (`ID_DB_SSLMODE=require`, the default).
 - The container listens on `:8080`, runs as nonroot on distroless, and has `/id -healthcheck` for Docker. In k8s, probe `GET /healthz`.
 - Serve it over HTTPS at the issuer URL. The cookies are `Secure` with the `__Host-` prefix.
 - At the edge: rate limit `/authorize`, `/callback`, `/token` and `/userinfo`. A JavaScript challenge (Anubis) must not cover `/token`, `/userinfo`, `/jwks.json` or `/.well-known/`: tools call them server-to-server.

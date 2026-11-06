@@ -22,6 +22,7 @@ type client struct {
 	SecretSHA256           string   `json:"secret_sha256,omitempty"`
 	SecretEnv              string   `json:"secret_env,omitempty"`
 	Public                 bool     `json:"public,omitempty"` // no secret, PKCE S256 required
+	Dev                    bool     `json:"dev,omitempty"`    // allows http://localhost redirect URIs
 	RedirectURIs           []string `json:"redirect_uris"`
 	PostLogoutRedirectURIs []string `json:"post_logout_redirect_uris,omitempty"`
 
@@ -61,7 +62,7 @@ func parseClients(data []byte, getenv func(string) string) (clientList, error) {
 			return nil, fmt.Errorf("client %q: redirect_uris is required", c.ID)
 		}
 		for _, u := range append(slices.Clone(c.RedirectURIs), c.PostLogoutRedirectURIs...) {
-			if err := checkRedirect(u); err != nil {
+			if err := checkRedirect(u, c.Dev); err != nil {
 				return nil, fmt.Errorf("client %q: %s: %w", c.ID, u, err)
 			}
 		}
@@ -92,8 +93,8 @@ func parseClients(data []byte, getenv func(string) string) (clientList, error) {
 	return out, nil
 }
 
-// checkRedirect allows https, or http only on loopback for local development.
-func checkRedirect(raw string) error {
+// checkRedirect allows https, or http on loopback for clients marked dev.
+func checkRedirect(raw string, dev bool) error {
 	u, err := url.Parse(raw)
 	if err != nil || !u.IsAbs() || u.Host == "" {
 		return fmt.Errorf("must be an absolute URL")
@@ -107,8 +108,8 @@ func checkRedirect(raw string) error {
 	switch u.Scheme {
 	case "https":
 	case "http":
-		if h := u.Hostname(); h != "localhost" && h != "127.0.0.1" && h != "::1" {
-			return fmt.Errorf("http is only allowed on loopback")
+		if h := u.Hostname(); !dev || h != "localhost" && h != "127.0.0.1" && h != "::1" {
+			return fmt.Errorf("http is only allowed on loopback, for a client with \"dev\": true")
 		}
 	default:
 		return fmt.Errorf("scheme must be https")

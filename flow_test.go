@@ -35,6 +35,12 @@ type fakeMastodon struct {
 	tokens   map[string]string         // token -> account id
 	revoked  []string
 	logins   int // times /oauth/authorize was hit
+	lastAuth url.Values
+	// Admin API behaviour: calls made, a forced status with its body, a delay.
+	adminCalls  int
+	adminStatus int
+	adminBody   string
+	adminDelay  time.Duration
 }
 
 const (
@@ -55,13 +61,14 @@ func adminEntity(id, username string) map[string]any {
 func newFakeMastodon(t *testing.T) (*fakeMastodon, *httptest.Server) {
 	f := &fakeMastodon{accounts: map[string]map[string]any{}, codes: map[string][2]string{}, tokens: map[string]string{}}
 	f.accounts["109"] = adminEntity("109", "ana")
-	f.accounts["109"]["role"] = map[string]any{"name": "Moderator"}
+	f.accounts["109"]["role"] = map[string]any{"id": "2", "name": "Moderator"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.logins++
+		f.lastAuth = q
 		if q.Get("client_id") != mastoClientID || q.Get("scope") != "profile" || q.Get("code_challenge_method") != "S256" {
 			http.Error(w, "bad authorize", 400)
 			return
@@ -108,6 +115,15 @@ func newFakeMastodon(t *testing.T) (*fakeMastodon, *httptest.Server) {
 			return
 		}
 		f.mu.Lock()
+		f.adminCalls++
+		delay, status, body := f.adminDelay, f.adminStatus, f.adminBody
+		f.mu.Unlock()
+		time.Sleep(delay)
+		if status != 0 {
+			http.Error(w, body, status)
+			return
+		}
+		f.mu.Lock()
 		defer f.mu.Unlock()
 		a, ok := f.accounts[r.PathValue("id")]
 		if !ok {
@@ -119,6 +135,18 @@ func newFakeMastodon(t *testing.T) (*fakeMastodon, *httptest.Server) {
 	srv := httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
 	return f, srv
+}
+
+func (f *fakeMastodon) admin(status int, body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.adminStatus, f.adminBody = status, body
+}
+
+func (f *fakeMastodon) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.adminCalls
 }
 
 func (f *fakeMastodon) set(id, field string, v any) {
@@ -149,6 +177,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	app := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
 	t.Cleanup(app.Close)
 	cfg := config{issuer: app.URL, instance: inst.URL, domain: "example.social", lang: "en", allowSilenced: true,
+		roleGroups: map[string]string{"2": "moderator"},
 		sessionTTL: 12 * time.Hour, refreshTTL: 24 * time.Hour,
 		dbHost: dbHost, dbPort: env("ID_TEST_DB_PORT", "5432"), dbUser: "id", dbPassword: "id", dbName: "id", dbSSLMode: "disable"}
 	ctx := context.Background()
@@ -349,7 +378,7 @@ func TestFullFlow(t *testing.T) {
 	}
 	claims := e.verifyIDToken(tok["id_token"].(string))
 	want := map[string]any{"iss": e.app.URL, "aud": "tool", "sub": "109", "nonce": "nonce-tool", "preferred_username": "ana", "name": "ANA",
-		"email": "ana@mail.example", "email_verified": true, "role": "Moderator", "profile": "https://example.social/@ana"}
+		"email": "ana@mail.example", "email_verified": true, "role": "moderator", "profile": "https://example.social/@ana"}
 	for k, v := range want {
 		if claims[k] != v {
 			t.Errorf("id_token %s = %v, want %v", k, claims[k], v)
@@ -359,7 +388,7 @@ func TestFullFlow(t *testing.T) {
 		t.Errorf("exp/auth_time: %v", claims)
 	}
 	st, info := e.userinfo(tok["access_token"].(string))
-	if st != 200 || info["sub"] != "109" || info["email"] != "ana@mail.example" || fmt.Sprint(info["groups"]) != "[Moderator]" {
+	if st != 200 || info["sub"] != "109" || info["email"] != "ana@mail.example" || fmt.Sprint(info["groups"]) != "[moderator]" {
 		t.Fatalf("userinfo: %d %v", st, info)
 	}
 	if st, _ := e.userinfo("nope"); st != 401 {

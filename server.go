@@ -228,7 +228,7 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		log.Printf("session: %v", err)
 	}
 	if ok {
-		if p, err := s.person(r.Context(), sess.AccountID, false); err == nil {
+		if p, err := s.person(r.Context(), sess.AccountID, personTTL); err == nil {
 			v.Acct = p.Username
 		}
 	}

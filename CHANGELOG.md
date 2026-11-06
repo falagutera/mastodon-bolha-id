@@ -11,7 +11,10 @@ First version.
 - Sign-in on the instance with its OAuth; only approved, confirmed and active local accounts get through, checked again on every authorization and refresh.
 - `id_token` signed with RS256, with the account id as `sub`, plus name, @, avatar, profile link, confirmed e-mail and role.
 - Consent page in Portuguese and English the first time an account uses a tool; the choice is remembered.
-- Short session here, so a second tool doesn't ask to sign in on the instance again.
-- Optional refresh tokens (`offline_access`), single use.
-- Audit log of sign-ins, consents, refusals and sign-outs, without tokens.
+- Short session here (2 hours by default), so a second tool doesn't ask to sign in on the instance again.
+- Optional refresh tokens (`offline_access`), single use and rotated. A replayed refresh token or authorization code revokes every token that came from the same code; signing out revokes the account's tokens.
+- Refresh is rate limited per account and per client, and keeps the refresh token when the instance fails; account lookups are cached and shared between concurrent requests.
+- `groups`/`role` claims only from an explicit mapping of instance role ids (`ID_ROLE_GROUPS`).
+- Safer defaults: confidential clients need PKCE or a nonce, http loopback redirects only for `dev` clients, database TLS required, Redis password required.
+- Audit log of sign-ins, consents, refusals and sign-outs, without tokens, with bounded and cleaned fields.
 - Release notes page, and the same data at `/release-notes.json`.

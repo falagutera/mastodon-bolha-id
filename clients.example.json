@@ -18,6 +18,13 @@
       "name": "Some single-page app",
       "public": true,
       "redirect_uris": ["https://spa.example.social/callback"]
+    },
+    {
+      "id": "local-dev",
+      "name": "Local development",
+      "public": true,
+      "dev": true,
+      "redirect_uris": ["http://localhost:3000/callback"]
     }
   ]
 }

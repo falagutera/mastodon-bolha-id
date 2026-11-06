@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,7 +19,20 @@ const (
 	errAPIStatus = "instance answered %s %d"
 )
 
-var errNoAccount = errors.New("account not found")
+var (
+	errNoAccount   = errors.New("account not found")
+	errRateLimited = errors.New("instance rate limit (429)")
+)
+
+// apiError is any answer but 200. Callers decide what a status means; by
+// default it is a transient upstream failure.
+type apiError struct {
+	path   string
+	status int
+	body   []byte
+}
+
+func (e *apiError) Error() string { return fmt.Sprintf(errAPIStatus, e.path, e.status) }
 
 // mastodon talks to the instance: the sign-in app (client id/secret) for the
 // person's identity, and the service token for the account status and e-mail.
@@ -53,11 +67,13 @@ func (m *mastodon) do(req *http.Request, out any) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return errNoAccount
+	if resp.StatusCode == http.StatusTooManyRequests {
+		log.Printf("instance rate limit on %s (429, retry after %q)", req.URL.Path, resp.Header.Get("Retry-After"))
+		return errRateLimited
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf(errAPIStatus, req.URL.Path, resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return &apiError{path: req.URL.Path, status: resp.StatusCode, body: body}
 	}
 	if out == nil {
 		return nil
@@ -137,7 +153,7 @@ type adminAccount struct {
 	Suspended bool    `json:"suspended"`
 	Silenced  bool    `json:"silenced"`
 	Role      *struct {
-		Name string `json:"name"`
+		ID json.RawMessage `json:"id"` // a string in the API, a number in some versions
 	} `json:"role"`
 	Account struct {
 		ID          string `json:"id"`
@@ -156,6 +172,17 @@ func (m *mastodon) adminAccount(ctx context.Context, id string) (adminAccount, e
 	}
 	req.Header.Set("Authorization", "Bearer "+m.adminToken)
 	if err := m.do(req, &a); err != nil {
+		// Only Mastodon's own "record not found" means the account is gone: a 404
+		// from a proxy or a maintenance page is a transient failure.
+		var ae *apiError
+		if errors.As(err, &ae) && ae.status == http.StatusNotFound {
+			var body struct {
+				Error *string `json:"error"`
+			}
+			if json.Unmarshal(ae.body, &body) == nil && body.Error != nil {
+				return a, errNoAccount
+			}
+		}
 		return a, err
 	}
 	if a.ID != id {
@@ -172,13 +199,17 @@ type person struct {
 	Avatar    string `json:"avatar"`
 	URL       string `json:"url"`
 	Email     string `json:"email"`
-	Role      string `json:"role"`
+	RoleID    string `json:"role_id"`
 	Local     bool   `json:"local"`
 	Confirmed bool   `json:"confirmed"`
 	Approved  bool   `json:"approved"`
 	Disabled  bool   `json:"disabled"`
 	Suspended bool   `json:"suspended"`
 	Silenced  bool   `json:"silenced"`
+	// Cache bookkeeping: when it was read from the instance, and whether the
+	// instance said the account doesn't exist (a short negative cache).
+	CachedAt int64 `json:"cached_at"`
+	Missing  bool  `json:"missing,omitempty"`
 }
 
 func personOf(a adminAccount) person {
@@ -191,7 +222,7 @@ func personOf(a adminAccount) person {
 		p.Name = p.Username
 	}
 	if a.Role != nil {
-		p.Role = a.Role.Name
+		p.RoleID = strings.Trim(string(a.Role.ID), `"`)
 	}
 	return p
 }

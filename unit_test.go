@@ -168,7 +168,7 @@ var testClientsJSON = `{"clients": [
   {"id": "tool", "name": "Tool", "secret_sha256": "` + sha256hex(testSecret) + `",
    "redirect_uris": ["https://client.example/cb"], "post_logout_redirect_uris": ["https://client.example/bye"]},
   {"id": "other", "name": "Other", "secret_sha256": "` + sha256hex(testSecret+"x") + `", "redirect_uris": ["https://other.example/cb"]},
-  {"id": "spa", "name": "SPA", "public": true, "redirect_uris": ["https://spa.example/cb", "http://localhost:3000/cb"]}
+  {"id": "spa", "name": "SPA", "public": true, "dev": true, "redirect_uris": ["https://spa.example/cb", "http://localhost:3000/cb"]}
 ]}`
 
 func sha256hex(s string) string {

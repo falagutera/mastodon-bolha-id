@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -43,6 +45,7 @@ type config struct {
 	previousKey          string
 	clientsFile          string
 	allowSilenced        bool
+	roleGroups           map[string]string // Mastodon role id -> group name
 	sessionTTL           time.Duration
 	refreshTTL           time.Duration
 	dbHost               string
@@ -116,7 +119,7 @@ func loadConfig() (config, error) {
 		dbUser:               env("ID_DB_USER", "id"),
 		dbPassword:           os.Getenv("ID_DB_PASSWORD"),
 		dbName:               env("ID_DB_NAME", "id"),
-		dbSSLMode:            env("ID_DB_SSLMODE", "prefer"),
+		dbSSLMode:            env("ID_DB_SSLMODE", "require"),
 		redisAddr:            os.Getenv("ID_REDIS_ADDR"),
 		redisPassword:        os.Getenv("ID_REDIS_PASSWORD"),
 	}
@@ -130,10 +133,13 @@ func loadConfig() (config, error) {
 	if c.allowSilenced, err = boolEnv("ID_ALLOW_SILENCED", true); err != nil {
 		return c, err
 	}
-	if c.sessionTTL, err = durationEnv("ID_SESSION_TTL", 12*time.Hour, 5*time.Minute, 7*24*time.Hour); err != nil {
+	if c.sessionTTL, err = durationEnv("ID_SESSION_TTL", 2*time.Hour, 5*time.Minute, 7*24*time.Hour); err != nil {
 		return c, err
 	}
 	if c.refreshTTL, err = durationEnv("ID_REFRESH_TTL", 30*24*time.Hour, time.Hour, 90*24*time.Hour); err != nil {
+		return c, err
+	}
+	if c.roleGroups, err = parseRoleGroups(os.Getenv("ID_ROLE_GROUPS")); err != nil {
 		return c, err
 	}
 	if u, err := url.Parse(c.instance); err != nil || u.Scheme != "https" || u.Host == "" || u.Path != "" {
@@ -155,10 +161,30 @@ func loadConfig() (config, error) {
 		return c, fmt.Errorf("ID_CLIENTS_FILE is required")
 	case c.dbHost == "" || c.dbPassword == "":
 		return c, fmt.Errorf("ID_DB_HOST and ID_DB_PASSWORD are required")
-	case c.redisAddr == "":
-		return c, fmt.Errorf("ID_REDIS_ADDR is required")
+	case c.redisAddr == "" || c.redisPassword == "":
+		return c, fmt.Errorf("ID_REDIS_ADDR and ID_REDIS_PASSWORD are required")
 	}
 	return c, nil
+}
+
+var groupName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// parseRoleGroups reads ID_ROLE_GROUPS, a JSON object from Mastodon role id to
+// the group name tools receive, such as {"3":"admin","2":"moderator"}.
+func parseRoleGroups(raw string) (map[string]string, error) {
+	out := map[string]string{}
+	if strings.TrimSpace(raw) == "" {
+		return out, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("ID_ROLE_GROUPS must be a JSON object like {\"3\":\"admin\"}: %w", err)
+	}
+	for id, g := range out {
+		if id == "" || !groupName.MatchString(g) {
+			return nil, fmt.Errorf("ID_ROLE_GROUPS: bad entry %q: %q", id, g)
+		}
+	}
+	return out, nil
 }
 
 func main() {

@@ -78,7 +78,7 @@ func (s *server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		s.renderErrorLang(w, r, http.StatusBadGateway, "instance", req.Lang)
 		return
 	}
-	p, err := s.person(ctx, accountID, true)
+	p, err := s.person(ctx, accountID, 0)
 	if err != nil && !errors.Is(err, errNoAccount) {
 		log.Printf("admin account %s: %v", accountID, err)
 		s.renderErrorLang(w, r, http.StatusBadGateway, "instance", req.Lang)
