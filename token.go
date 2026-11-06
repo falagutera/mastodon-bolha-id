@@ -158,7 +158,16 @@ func (s *server) revokeAccount(ctx context.Context, accountID string) error {
 			return err
 		}
 	}
-	return s.rdb.Del(context.WithoutCancel(ctx), accountFams+accountID).Err()
+	if len(fams) == 0 {
+		return nil
+	}
+	// Remove only what was revoked: a family registered meanwhile (a code issued
+	// during the sign-out) stays listed, so a later sign-out still reaches it.
+	members := make([]any, len(fams))
+	for i, f := range fams {
+		members[i] = f
+	}
+	return s.rdb.SRem(context.WithoutCancel(ctx), accountFams+accountID, members...).Err()
 }
 
 // consumeScript deletes a code or refresh token and, in the same step, leaves
