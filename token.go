@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -210,16 +211,29 @@ func (s *server) replayed(ctx context.Context, usedKey, what, clientID string) {
 	}
 }
 
-// allow counts one request against a per-minute limit.
+// rateScript counts one request in a fixed window. It sets the expiry on the
+// first hit (and repairs a counter that lost it), so it needs no EXPIRE NX and
+// works on any Redis with scripting.
+var rateScript = redis.NewScript(`
+local n = redis.call('INCR', KEYS[1])
+local ttl = redis.call('PTTL', KEYS[1])
+if n == 1 or ttl < 0 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
+return {n, ttl}`)
+
+// allow counts one request against a per-minute limit. On a Redis error it
+// returns the error and the caller refuses the request: it never fails open.
 func (s *server) allow(ctx context.Context, key string, limit int64) (bool, time.Duration, error) {
-	pipe := s.rdb.TxPipeline()
-	n := pipe.Incr(ctx, rateKey+key)
-	pipe.ExpireNX(ctx, rateKey+key, time.Minute)
-	ttl := pipe.TTL(ctx, rateKey+key)
-	if _, err := pipe.Exec(ctx); err != nil {
-		return true, 0, err
+	res, err := rateScript.Run(ctx, s.rdb, []string{rateKey + key}, time.Minute.Milliseconds()).Int64Slice()
+	if err != nil {
+		return false, 0, err
 	}
-	return n.Val() <= limit, ttl.Val(), nil
+	if len(res) != 2 {
+		return false, 0, errors.New("rate limit: unexpected reply")
+	}
+	return res[0] <= limit, time.Duration(res[1]) * time.Millisecond, nil
 }
 
 // --- token endpoint ---------------------------------------------------------
@@ -335,7 +349,7 @@ func (s *server) codeGrant(w http.ResponseWriter, r *http.Request, c *client) {
 	if !ok {
 		return
 	}
-	s.issueTokens(w, r, c, g, p, false)
+	s.issueTokens(w, r, c, g, p)
 }
 
 // refreshGrant validates everything before it consumes the refresh token, so a
@@ -382,10 +396,16 @@ func (s *server) refreshGrant(w http.ResponseWriter, r *http.Request, c *client)
 	for _, lim := range []struct {
 		key   string
 		limit int64
-	}{{"acct:" + g.AccountID, refreshPerAccount}, {"client:" + c.ID, refreshPerClient}} {
+	}{
+		// Per account and client: one looping tool can't lock the person out of the others.
+		{"acct:" + g.AccountID + ":" + c.ID, refreshPerAccount},
+		{"client:" + c.ID, refreshPerClient},
+	} {
 		ok, wait, err := s.allow(ctx, lim.key, lim.limit)
 		if err != nil {
 			log.Printf("rate limit: %v", err)
+			upstreamFail(w)
+			return
 		}
 		if !ok {
 			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(wait.Seconds()))))
@@ -397,9 +417,20 @@ func (s *server) refreshGrant(w http.ResponseWriter, r *http.Request, c *client)
 	if !ok {
 		return
 	}
-	// Now rotate: only one request can consume it.
-	scopes := g.Scopes
-	if err := s.consume(ctx, refreshKey+h, refreshUsed+h, s.cfg.refreshTTL, &g); err != nil {
+	// Rotate: the successor tokens are stored first, then the old token is
+	// consumed (and marked used). If anything fails before the consume, the old
+	// token is untouched; if the consume fails, the successors are deleted.
+	g.Nonce = ""
+	resp, keys, err := s.mintTokens(ctx, c, g, p)
+	if err != nil {
+		tokenFailFor(w, err)
+		return
+	}
+	var old grant
+	if err := s.consume(ctx, refreshKey+h, refreshUsed+h, s.cfg.refreshTTL, &old); err != nil {
+		if derr := s.rdb.Del(context.WithoutCancel(ctx), keys...).Err(); derr != nil {
+			log.Printf("token: drop successors: %v", derr)
+		}
 		if !errors.Is(err, errMissing) {
 			log.Printf("token: %v", err)
 			upstreamFail(w)
@@ -409,8 +440,8 @@ func (s *server) refreshGrant(w http.ResponseWriter, r *http.Request, c *client)
 		tokenFail(w, http.StatusBadRequest, "invalid_grant", "refresh token already used")
 		return
 	}
-	g.Scopes, g.Nonce = scopes, ""
-	s.issueTokens(w, r, c, g, p, true)
+	s.auditLog(ctx, auditEntry{AccountID: p.ID, Acct: p.Username, ClientID: c.ID, Event: "refresh"})
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // tokenAccount checks the account. A transient failure answers 503 and leaves
@@ -447,44 +478,62 @@ type tokenResponse struct {
 	Scope        string `json:"scope"`
 }
 
-func (s *server) issueTokens(w http.ResponseWriter, r *http.Request, c *client, g grant, p person, refresh bool) {
-	ctx := r.Context()
+var errSign = errors.New("signing failed")
+
+// tokenFailFor answers a mintTokens failure.
+func tokenFailFor(w http.ResponseWriter, err error) {
+	log.Printf("token: %v", err)
+	if errors.Is(err, errSign) {
+		tokenFail(w, http.StatusInternalServerError, "server_error", "")
+		return
+	}
+	upstreamFail(w)
+}
+
+func (s *server) issueTokens(w http.ResponseWriter, r *http.Request, c *client, g grant, p person) {
+	resp, _, err := s.mintTokens(r.Context(), c, g, p)
+	if err != nil {
+		tokenFailFor(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// mintTokens stores new tokens of the grant's family and returns them with
+// their Redis keys. On failure, what it stored is deleted.
+func (s *server) mintTokens(ctx context.Context, c *client, g grant, p person) (resp tokenResponse, keys []string, err error) {
 	now := s.now()
+	defer func() {
+		if err != nil && len(keys) > 0 {
+			s.rdb.Del(context.WithoutCancel(ctx), keys...)
+		}
+	}()
 	next := grant{ClientID: c.ID, AccountID: p.ID, Scopes: g.Scopes, AuthTime: g.AuthTime, Family: g.Family}
 	access, err := s.kv.newSecret(ctx, accessKey, next, accessTTL)
 	if err != nil {
-		log.Printf("token: %v", err)
-		upstreamFail(w)
-		return
+		return resp, keys, err
 	}
-	keys := []string{accessKey + hashID(access)}
-	resp := tokenResponse{AccessToken: access, TokenType: "Bearer", ExpiresIn: int(accessTTL.Seconds()), Scope: strings.Join(g.Scopes, " ")}
+	keys = []string{accessKey + hashID(access)}
+	resp = tokenResponse{AccessToken: access, TokenType: "Bearer", ExpiresIn: int(accessTTL.Seconds()), Scope: strings.Join(g.Scopes, " ")}
 	if slices.Contains(g.Scopes, "openid") {
 		claims := idClaims{Iss: s.cfg.issuer, Sub: p.ID, Aud: c.ID, Exp: now.Add(idTokenTTL).Unix(), Iat: now.Unix(),
 			AuthTime: g.AuthTime, Nonce: g.Nonce, userClaims: s.claimsOf(p, g.Scopes)}
 		if resp.IDToken, err = s.keys.sign(claims); err != nil {
-			log.Printf("sign: %v", err)
-			tokenFail(w, http.StatusInternalServerError, "server_error", "")
-			return
+			return resp, keys, fmt.Errorf("%w: %v", errSign, err)
 		}
 	}
 	if slices.Contains(g.Scopes, "offline_access") {
-		if resp.RefreshToken, err = s.kv.newSecret(ctx, refreshKey, next, s.cfg.refreshTTL); err != nil {
-			log.Printf("token: %v", err)
-			upstreamFail(w)
-			return
+		var rt string
+		if rt, err = s.kv.newSecret(ctx, refreshKey, next, s.cfg.refreshTTL); err != nil {
+			return resp, keys, err
 		}
-		keys = append(keys, refreshKey+hashID(resp.RefreshToken))
+		resp.RefreshToken = rt
+		keys = append(keys, refreshKey+hashID(rt))
 	}
-	if err := s.track(ctx, g.Family, p.ID, keys...); err != nil {
-		log.Printf("token family: %v", err)
-		upstreamFail(w)
-		return
+	if err = s.track(ctx, g.Family, p.ID, keys...); err != nil {
+		return resp, keys, fmt.Errorf("token family: %w", err)
 	}
-	if refresh {
-		s.auditLog(ctx, auditEntry{AccountID: p.ID, Acct: p.Username, ClientID: c.ID, Event: "refresh"})
-	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp, keys, nil
 }
 
 // userClaims are the claims about the person, by scope.
@@ -607,13 +656,14 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	clientID := r.Form.Get("client_id")
 	hintOK := true
+	hintSub := "" // the account of a valid id_token_hint
 	if hint := r.Form.Get("id_token_hint"); hint != "" {
 		var claims idClaims
 		if err := s.keys.verify(hint, &claims); err != nil || claims.Iss != s.cfg.issuer ||
 			(clientID != "" && clientID != claims.Aud) || (ok && claims.Sub != sess.AccountID) {
 			hintOK = false
 		} else {
-			clientID = claims.Aud
+			clientID, hintSub = claims.Aud, claims.Sub
 		}
 	}
 	c := s.clients[clientID]
@@ -651,6 +701,15 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		s.auditLog(ctx, e)
 	} else {
 		s.clearCookie(w, sessionCookie)
+		// RP-initiated logout without a session here: a valid id_token_hint of a
+		// registered client (only RPs hold id_tokens) still revokes the
+		// account's tokens, as a session logout does.
+		if hintSub != "" && c != nil {
+			if err := s.revokeAccount(ctx, hintSub); err != nil {
+				log.Printf("logout: revoke tokens: %v", err)
+			}
+			s.auditLog(ctx, auditEntry{AccountID: hintSub, ClientID: c.ID, Event: "logout", Detail: "id_token_hint"})
+		}
 	}
 	if target != "" && hintOK && c != nil && c.allowsLogoutRedirect(target) {
 		u, _ := url.Parse(target)

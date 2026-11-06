@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // Regression tests for the security review of 0.1.0.
@@ -122,7 +124,7 @@ func TestRefreshRateLimit(t *testing.T) {
 		t.Fatalf("over the limit: %d, Retry-After %q", resp.StatusCode, resp.Header.Get("Retry-After"))
 	}
 	// The limited token is still good once the window passes.
-	e.rdb.Del(context.Background(), rateKey+"acct:109")
+	e.rdb.Del(context.Background(), rateKey+"acct:109:tool")
 	if st, _ := e.refresh(rt); st != 200 {
 		t.Fatalf("after the window: %d", st)
 	}
@@ -439,5 +441,123 @@ func TestCodeIssuedBeforeLogout(t *testing.T) {
 	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {"https://client.example/cb"}, "code_verifier": {verifier}}
 	if st, _ := e.token(form, "tool", testSecret); st != 400 {
 		t.Fatalf("code redeemed after logout: %d", st)
+	}
+}
+
+// --- Strix retest ---------------------------------------------------------------
+
+// signInOther is signIn for another registered client.
+func (e *testEnv) signInOther(b *http.Client) map[string]any {
+	e.t.Helper()
+	resp, page := e.get(b, "/authorize", authParams("other", "https://other.example/cb", "", "openid offline_access"))
+	if resp.StatusCode == 200 {
+		resp = e.consent(b, page, "allow")
+	}
+	code := redirected(e.t, resp, "https://other.example/cb").Get("code")
+	st, tok := e.token(url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {"https://other.example/cb"}}, "other", testSecret+"x")
+	if st != 200 || tok["refresh_token"] == nil {
+		e.t.Fatalf("sign-in to other: %d %v", st, tok)
+	}
+	return tok
+}
+
+// 1. One client looping on refresh doesn't lock the account out of other clients.
+func TestRefreshLimitPerAccountAndClient(t *testing.T) {
+	e := newTestEnv(t)
+	b := e.browser()
+	rt := e.signIn(b)["refresh_token"]
+	other := e.signInOther(b)
+	for range refreshPerAccount {
+		st, out := e.refresh(rt)
+		if st != 200 {
+			t.Fatalf("refresh: %d", st)
+		}
+		rt = out["refresh_token"]
+	}
+	if st, _ := e.refresh(rt); st != 429 {
+		t.Fatalf("tool over its limit: %d", st)
+	}
+	st, out := e.token(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {other["refresh_token"].(string)}}, "other", testSecret+"x")
+	if st != 200 {
+		t.Fatalf("other client locked out by tool's loop: %d %v", st, out)
+	}
+}
+
+// 2. The limiter sets its own expiry (no EXPIRE NX), repairs a counter without
+// one, and refuses when Redis fails.
+func TestRateLimiter(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	if ok, wait, err := e.s.allow(ctx, "t1", 2); !ok || err != nil || wait <= 0 || wait > time.Minute {
+		t.Fatalf("first hit: %v %v %v", ok, wait, err)
+	}
+	if ttl := e.rdb.PTTL(ctx, rateKey+"t1").Val(); ttl <= 0 {
+		t.Fatalf("no expiry: %v", ttl)
+	}
+	e.s.allow(ctx, "t1", 2)
+	if ok, _, _ := e.s.allow(ctx, "t1", 2); ok {
+		t.Fatal("third hit allowed with limit 2")
+	}
+	e.rdb.Set(ctx, rateKey+"t2", 5, 0) // a counter that lost its expiry
+	e.s.allow(ctx, "t2", 100)
+	if ttl := e.rdb.PTTL(ctx, rateKey+"t2").Val(); ttl <= 0 {
+		t.Fatalf("expiry not repaired: %v", ttl)
+	}
+	broken := *e.s
+	broken.rdb = redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: 200 * time.Millisecond})
+	if ok, _, err := broken.allow(ctx, "t3", 100); ok || err == nil {
+		t.Fatalf("limiter failed open: %v %v", ok, err)
+	}
+}
+
+// 3. A failure while storing the successor tokens leaves the old refresh token
+// usable and marks nothing as used.
+func TestRotationFailureKeepsToken(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	tok := e.signIn(e.browser())
+	rt := tok["refresh_token"].(string)
+	var g grant
+	if err := e.s.kv.get(ctx, refreshKey+hashID(rt), &g); err != nil {
+		t.Fatal(err)
+	}
+	// Make tracking the new tokens fail (wrong Redis type for the family set).
+	e.rdb.Del(ctx, familyKeys+g.Family)
+	e.rdb.Set(ctx, familyKeys+g.Family, "x", time.Minute)
+	if st, _ := e.refresh(rt); st != 503 {
+		t.Fatalf("refresh with a storage failure: %d", st)
+	}
+	if n := e.rdb.Exists(ctx, refreshUsed+hashID(rt)).Val(); n != 0 {
+		t.Fatal("old token marked used without a successor")
+	}
+	e.rdb.Del(ctx, familyKeys+g.Family)
+	st, out := e.refresh(rt)
+	if st != 200 {
+		t.Fatalf("retry after the failure: %d %v", st, out)
+	}
+	if st, _ := e.userinfo(out["access_token"].(string)); st != 200 {
+		t.Fatalf("family revoked by the retry: %d", st)
+	}
+}
+
+// 4. RP-initiated logout with a valid id_token_hint and no session here still
+// revokes the account's tokens; a forged hint revokes nothing.
+func TestLogoutHintWithoutSession(t *testing.T) {
+	e := newTestEnv(t)
+	tok := e.signIn(e.browser())
+	hint := tok["id_token"].(string)
+	parts := strings.Split(hint, ".")
+	forged := parts[0] + "." + b64([]byte(`{"iss":"`+e.app.URL+`","sub":"109","aud":"tool"}`)) + "." + parts[2]
+	e.get(e.browser(), "/logout", url.Values{"id_token_hint": {forged}})
+	if st, _ := e.refresh(tok["refresh_token"]); st != 200 {
+		t.Fatalf("forged hint revoked tokens: %d", st)
+	}
+	tok = e.signIn(e.browser())
+	e.get(e.browser(), "/logout", url.Values{"id_token_hint": {tok["id_token"].(string)}})
+	if st, _ := e.refresh(tok["refresh_token"]); st != 400 {
+		t.Fatalf("refresh after hint logout: %d", st)
+	}
+	if st, _ := e.userinfo(tok["access_token"].(string)); st != 401 {
+		t.Fatalf("userinfo after hint logout: %d", st)
 	}
 }
