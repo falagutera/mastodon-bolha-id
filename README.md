@@ -41,7 +41,45 @@ This app decides who gets into other tools, so it is tested and reviewed as a se
 
 **Reporting a vulnerability.** Write to contato@gutocarvalho.net. Please don't open a public issue for it.
 
-## How it works
+## Architecture
+
+**Why it exists.** The bolha community runs many tools (an editor, design, notes, forges, video…), and each one used to have its own sign-up, its own password and its own queue of accounts to approve. `id` centralizes sign-in on the person's **bolha.us** account: a tool connected to it needs no sign-up of its own, and the approval that already happens on bolha.us is the only one.
+
+**In plain words.** Mastodon knows how to authenticate its accounts, but it doesn't speak the standard sign-in protocol most tools understand (OpenID Connect). `id` is a bridge between the two:
+
+1. the tool sends the person to `id.bolha.us`;
+2. `id` sends the person to `bolha.us`, where they sign in as usual;
+3. `id` checks that the account is approved and active, asks the person's consent the first time, and sends them back to the tool, signed in.
+
+**For the people using it:** one password (the bolha.us one) for every connected tool; no new sign-up or approval wait; a consent page that shows what each tool receives (name, @handle and e-mail); and when an account is suspended on bolha.us, its access to the tools ends too.
+
+**Components.**
+
+```
+                 browser
+                    |
+   +----------------+-----------------+
+   |                                  |
+ Tool (relying party)          id.bolha.us  (this app, 2 stateless replicas)
+ Penpot, Overleaf, ...          |      |        |
+   |  /token, /userinfo,        |      |        +--> Redis       sessions, codes, tokens,
+   |  /jwks.json (server to     |      |             (hashed, with TTL), status cache
+   |  server)                   |      +----------> PostgreSQL  consents, audit log
+   +--------------------------->|
+                                +--> bolha.us (Mastodon)
+                                      - OAuth: the person signs in, id learns the account id
+                                      - admin API (read-only service token): e-mail,
+                                        role, approved / confirmed / suspended / disabled
+```
+
+- `id` keeps no password and no Mastodon token of the person: the sign-in token is revoked as soon as the account id is known.
+- Tools only receive standard OpenID Connect: an `id_token` signed by `id` (keys published at `/jwks.json`), and claims at `/userinfo`. They key accounts on `sub`, the stable bolha.us account id.
+- Admin rights in a tool come from the `groups` claim, mapped from bolha.us roles by `ID_ROLE_GROUPS` (only listed roles produce a group).
+- At bolha, `id` runs in Kubernetes behind the same edge as the other services (nginx, BunkerWeb, Anubis on the browser pages only).
+
+## How it works (protocol detail)
+
+The same flow, step by step, as a tool developer sees it:
 
 ```
  Tool (RP)             id.bolha.us                          bolha.us (Mastodon)
