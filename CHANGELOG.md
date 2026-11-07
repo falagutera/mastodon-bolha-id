@@ -3,6 +3,12 @@
 All notable changes to id. Versions follow [SemVer](https://semver.org/); images are
 published as `registry.gutocarvalho.net/images/id:<version>-<build>`.
 
+## 0.1.2 — 2026-11-07
+
+Hardening from the updated linters.
+
+- The image declares the numeric distroless "nonroot" user (`USER 65532:65532`), so scanners and runtimes see a non-root user.
+
 ## 0.1.1 — 2026-11-06
 
 - A confidential client can be allowed to sign in without PKCE or a nonce (`"allow_no_pkce_or_nonce": true` in the clients file), for RP libraries that only send `state`, such as passport-openidconnect 0.1.x used by Overleaf. Off by default, refused on public clients, logged as a warning at startup. PKCE or a nonce that the client does send is still checked.
