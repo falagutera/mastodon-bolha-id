@@ -217,7 +217,7 @@ Put `client_id` and `client_secret` in `ID_MASTODON_CLIENT_ID` and `ID_MASTODON_
 
 ### Service account
 
-The app reads e-mail, role and status with the admin API. Create a dedicated account (for example `idbot`), give it a role whose only permission is **Manage Users** (needed for `admin:read:accounts`), and create a token for it with only the `admin:read:accounts` scope: in Preferences, Development, New application, scope `admin:read:accounts`, then copy "Your access token". Put it in `ID_MASTODON_ADMIN_TOKEN`.
+The app reads e-mail, role and status with the admin API. Create a dedicated account (for example `identifica`), give it a role whose only permission is **Manage Users** (needed for `admin:read:accounts`), and create a token for it with only the `admin:read:accounts` scope: in Preferences, Development, New application, scope `admin:read:accounts`, then copy "Your access token". Put it in `ID_MASTODON_ADMIN_TOKEN`.
 
 This token can read every account's e-mail and IP data. Keep it in a Secret, and don't reuse it elsewhere.
 
@@ -316,4 +316,4 @@ AGPL-3.0, see [LICENSE](LICENSE). Fonts: see [NOTICE](NOTICE).
 
 ## Bot account
 
-The app's account on bolha.us, @idbot, is marked as a bot and uses [`docs/bot-avatar.png`](docs/bot-avatar.png) as its avatar, in the style of the other bolha.us bots.
+The app's account on bolha.us, @identifica, is marked as a bot and uses [`docs/bot-avatar.png`](docs/bot-avatar.png) as its avatar, in the style of the other bolha.us bots.
