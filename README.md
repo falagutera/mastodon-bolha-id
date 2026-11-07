@@ -313,3 +313,7 @@ docker rm -f id-pg id-redis
 ## License
 
 AGPL-3.0, see [LICENSE](LICENSE). Fonts: see [NOTICE](NOTICE).
+
+## Bot account
+
+The app's account on bolha.us, @idbot, is marked as a bot and uses [`docs/bot-avatar.png`](docs/bot-avatar.png) as its avatar, in the style of the other bolha.us bots.
