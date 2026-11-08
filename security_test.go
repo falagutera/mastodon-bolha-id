@@ -282,11 +282,14 @@ func TestLogoutAuditClientID(t *testing.T) {
 	}
 	m := hiddenRe.FindStringSubmatch(page)
 	// 10000 × "x%0A" stays under the 64 KiB form limit, so the logout really runs.
+	mark := e.auditMark()
 	if resp := e.postLogout(b, url.Values{"csrf": {m[2]}, "client_id": {strings.Repeat("x\n", 10000)}}, "same-origin"); resp.StatusCode != 200 {
 		t.Fatalf("confirmed logout: %d", resp.StatusCode)
 	}
 	var client string
-	e.s.db.pool.QueryRow(context.Background(), `SELECT client_id FROM audit_log WHERE event = 'logout' ORDER BY id DESC LIMIT 1`).Scan(&client)
+	if err := e.s.db.pool.QueryRow(context.Background(), `SELECT client_id FROM audit_log WHERE id > $1 AND event = 'logout' AND account_id = '109'`, mark).Scan(&client); err != nil {
+		t.Fatalf("logout row: %v", err)
+	}
 	if client != "" {
 		t.Fatalf("unregistered client_id logged: %d bytes", len(client))
 	}

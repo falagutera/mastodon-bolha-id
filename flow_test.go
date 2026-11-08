@@ -157,12 +157,15 @@ func (f *fakeMastodon) set(id, field string, v any) {
 }
 
 type testEnv struct {
-	t    *testing.T
-	f    *fakeMastodon
-	s    *server
-	app  *httptest.Server
-	rdb  *redis.Client
-	jwks []jwk
+	// auditFrom is the newest audit_log id when the env was made: audit_log is
+	// never cleaned, so auditCount only sees this test's rows.
+	auditFrom int64
+	t         *testing.T
+	f         *fakeMastodon
+	s         *server
+	app       *httptest.Server
+	rdb       *redis.Client
+	jwks      []jwk
 }
 
 // testDBName is the database the tests use (ID_TEST_DB_NAME, default id_test).
@@ -233,7 +236,9 @@ func newTestEnv(t *testing.T) *testEnv {
 		adminToken: adminToken, client: inst.Client()}
 	s := newServer(cfg, tmpl, api, db, rdb, testKeySet(t), clients)
 	handler = s.routes()
-	return &testEnv{t: t, f: f, s: s, app: app, rdb: rdb}
+	e := &testEnv{t: t, f: f, s: s, app: app, rdb: rdb}
+	e.auditFrom = e.auditMark()
+	return e
 }
 
 // browser keeps cookies and stops at the clients' redirect URIs.
@@ -372,9 +377,23 @@ func (e *testEnv) verifyIDToken(tok string) map[string]any {
 	return claims
 }
 
+// auditMark is the newest audit_log id now. Look only at rows after a mark
+// (id > mark), never at "the newest row" or totals: audit_log keeps every run.
+func (e *testEnv) auditMark() int64 {
+	var id int64
+	if err := e.s.db.pool.QueryRow(context.Background(), `SELECT coalesce(max(id), 0) FROM audit_log`).Scan(&id); err != nil {
+		e.t.Fatal(err)
+	}
+	return id
+}
+
+// auditCount counts this test's audit rows (after auditFrom) of an event and account.
 func (e *testEnv) auditCount(event, account string) int {
 	var n int
-	e.s.db.pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_log WHERE event = $1 AND account_id = $2`, event, account).Scan(&n)
+	if err := e.s.db.pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_log WHERE id > $1 AND event = $2 AND account_id = $3`,
+		e.auditFrom, event, account).Scan(&n); err != nil {
+		e.t.Fatal(err)
+	}
 	return n
 }
 
