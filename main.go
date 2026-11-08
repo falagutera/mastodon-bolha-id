@@ -56,6 +56,9 @@ type config struct {
 	dbSSLMode            string
 	redisAddr            string
 	redisPassword        string
+	// Account linking (link.go): PeerTube database DSN and its auth plugin name.
+	peertubeDSN    string
+	peertubePlugin string
 }
 
 func env(key, fallback string) string {
@@ -122,12 +125,16 @@ func loadConfig() (config, error) {
 		dbSSLMode:            env("ID_DB_SSLMODE", "require"),
 		redisAddr:            os.Getenv("ID_REDIS_ADDR"),
 		redisPassword:        os.Getenv("ID_REDIS_PASSWORD"),
+		peertubePlugin:       env("ID_LINK_PEERTUBE_PLUGIN", "peertube-plugin-auth-openid-connect"),
 	}
 	var err error
 	if c.signingKey, err = secretEnv("ID_SIGNING_KEY"); err != nil {
 		return c, err
 	}
 	if c.previousKey, err = secretEnv("ID_SIGNING_KEY_PREVIOUS"); err != nil {
+		return c, err
+	}
+	if c.peertubeDSN, err = secretEnv("ID_LINK_PEERTUBE_DSN"); err != nil {
 		return c, err
 	}
 	if c.allowSilenced, err = boolEnv("ID_ALLOW_SILENCED", true); err != nil {
@@ -231,6 +238,9 @@ func main() {
 		client: &http.Client{Timeout: 15 * time.Second},
 	}
 	s := newServer(cfg, tmpl, api, db, rdb, keys, clients)
+	if err := s.setupLinkers(ctx); err != nil {
+		log.Fatal(err)
+	}
 	log.Printf("id %s listening on %s, issuer %s, instance %s, %d clients", version, cfg.listen, cfg.issuer, cfg.domain, len(clients))
 	srv := &http.Server{
 		Addr:              cfg.listen,

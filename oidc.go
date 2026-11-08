@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -243,8 +244,15 @@ func (s *server) continueAuth(w http.ResponseWriter, r *http.Request, sess sessi
 		s.renderErrorLang(w, r, http.StatusForbidden, refusalKey(reason), req.Lang)
 		return
 	}
+	// An existing account to link always gets the consent page, even if consent
+	// was given before (but never with prompt=none, which can't show a page).
+	var cand linkCandidate
+	offer := false
+	if !hasPrompt(req.Prompt, "none") {
+		cand, offer = s.linkOffer(ctx, c, p)
+	}
 	done := false
-	if !hasPrompt(req.Prompt, "consent") {
+	if !offer && !hasPrompt(req.Prompt, "consent") {
 		done, err = s.db.consented(ctx, p.ID, c.ID, req.Scopes)
 		if err != nil {
 			log.Printf("consent: %v", err)
@@ -272,8 +280,26 @@ func (s *server) continueAuth(w http.ResponseWriter, r *http.Request, sess sessi
 	v := s.view(r, req.Lang)
 	v.ClientName, v.Acct, v.RequestID, v.CSRF = c.Name, p.Username, requestID, sess.CSRF
 	v.Shares = shares(v.T, req.Scopes)
+	if offer {
+		v.LinkAcct, v.LinkID = cand.Username, cand.key()
+	}
 	w.Header().Set("Content-Security-Policy", csp("'self' "+origin(req.RedirectURI)))
 	s.render(w, "consent.html", http.StatusOK, v)
+}
+
+// linkOffer looks for an existing account of this person in the tool, by the
+// person's confirmed e-mail. Any failure just means no offer.
+func (s *server) linkOffer(ctx context.Context, c *client, p person) (linkCandidate, bool) {
+	l := s.linkers[c.ID]
+	if l == nil || !p.Confirmed || p.Email == "" {
+		return linkCandidate{}, false
+	}
+	cand, ok, err := l.find(ctx, p.Email)
+	if err != nil {
+		log.Printf("link %s: %v", c.ID, err)
+		return linkCandidate{}, false
+	}
+	return cand, ok
 }
 
 func shares(t map[string]string, scopes []string) []string {
@@ -352,6 +378,24 @@ func (s *server) handleConsent(w http.ResponseWriter, r *http.Request) {
 		s.auditLog(ctx, auditEntry{AccountID: p.ID, Acct: p.Username, ClientID: c.ID, Event: "deny"})
 		s.redirectError(w, r, req.RedirectURI, req.State, "access_denied", "", http.StatusSeeOther)
 		return
+	}
+	if want := r.PostFormValue("link"); want != "" {
+		l := s.linkers[c.ID]
+		cand, ok := s.linkOffer(ctx, c, p)
+		if l == nil || !ok || cand.key() != want {
+			s.renderErrorLang(w, r, http.StatusConflict, "link_gone", req.Lang)
+			return
+		}
+		if err := l.link(ctx, cand, p.Email, p.ID); err != nil {
+			if errors.Is(err, errLinkGone) {
+				s.renderErrorLang(w, r, http.StatusConflict, "link_gone", req.Lang)
+				return
+			}
+			log.Printf("link %s: %v", c.ID, err)
+			s.renderErrorLang(w, r, http.StatusServiceUnavailable, "unavailable", req.Lang)
+			return
+		}
+		s.auditLog(ctx, auditEntry{AccountID: p.ID, Acct: p.Username, ClientID: c.ID, Event: "link", Detail: "account " + cand.Username})
 	}
 	if err := s.db.consent(ctx, p.ID, c.ID, req.Scopes); err != nil {
 		log.Printf("consent: %v", err)

@@ -162,6 +162,8 @@ All configuration is in environment variables. See `.env.example`.
 | `ID_SESSION_TTL` | no | `2h` | The session here; within it, tools don't send people to the instance again. Kept short for shared devices: signing out of a tool doesn't end it |
 | `ID_ROLE_GROUPS` | no | none | JSON object from Mastodon role id to group name, such as `{"3":"admin","2":"moderator"}`. Role ids are in the instance's admin UI (Roles) or `GET /api/v1/admin/accounts/:id` |
 | `ID_REFRESH_TTL` | no | `720h` | Lifetime of a refresh token (each use gives a new one) |
+| `ID_LINK_PEERTUBE_DSN` or `ID_LINK_PEERTUBE_DSN_FILE` | no | | PostgreSQL DSN of PeerTube's database, for clients with `"account_link": "peertube"`. Without it those clients sign in without the linking offer. See [docs/account-linking.md](docs/account-linking.md) |
+| `ID_LINK_PEERTUBE_PLUGIN` | no | `peertube-plugin-auth-openid-connect` | npm name of the PeerTube auth plugin the linked accounts move to |
 
 Fixed values: authorization code 60 s, access token and `id_token` 10 min, pending sign-in 10 min, account status cache 5 min (1 min on refresh, 1 min for "account doesn't exist"), 30 refreshes per minute per account and client, and 600 per client.
 
@@ -194,6 +196,7 @@ Clients are in a JSON file (a ConfigMap in k8s), loaded at startup. See `clients
 - Confidential clients must send a PKCE `code_challenge` (S256), a `nonce`, or both; a request with neither is refused. When they send a `code_challenge`, the verifier is required.
 - `"lowercase_username": true` sends `preferred_username` in lower case, for apps that only accept lower-case usernames (PeerTube). Mastodon usernames are unique ignoring case, so this cannot make two people share a name.
 - `"allow_no_pkce_or_nonce": true` (confidential clients only; refused on a public client at startup; off by default) lets a client sign in with neither, for RP libraries that only send `state`, such as passport-openidconnect 0.1.x (Overleaf). Whatever PKCE or nonce such a client does send is still checked. The app logs a warning at startup for each client that has it. Remove it as soon as the tool supports PKCE; see the security notes.
+- `"account_link": "peertube"`: the consent page offers to link the person's existing password account in that PeerTube (same e-mail as the confirmed one on the instance), so they can sign in to it from here. Needs `ID_LINK_PEERTUBE_DSN`; see [docs/account-linking.md](docs/account-linking.md).
 - `post_logout_redirect_uris`: where `/logout` may send people back. Without it, logout shows a page here.
 
 Restart the app (roll the Deployment) after changing the file.
@@ -247,7 +250,7 @@ Losing Redis signs everyone out of this app and invalidates outstanding tokens a
 
 ### Audit log
 
-`audit_log` has one row per event (fields are stripped of control characters and cut at 200 characters; `/logout` records the client id only when it is a registered client): `login` (a code was issued to a client), `consent`, `deny`, `refused` (with the reason: `suspended`, `disabled`, `unapproved`, `unconfirmed`, `no_email`, `silenced`, `remote`, `gone`), `refresh` and `logout`. It holds the account id, username, client id and time. Never tokens, codes, secrets or IPs.
+`audit_log` has one row per event (fields are stripped of control characters and cut at 200 characters; `/logout` records the client id only when it is a registered client): `login` (a code was issued to a client), `consent`, `deny`, `refused` (with the reason: `suspended`, `disabled`, `unapproved`, `unconfirmed`, `no_email`, `silenced`, `remote`, `gone`), `link` (an existing account in the tool was linked, with its username), `refresh` and `logout`. It holds the account id, username, client id and time. Never tokens, codes, secrets or IPs.
 
 ## Security notes
 

@@ -3,11 +3,22 @@
 <p class="lede">{{printf .T.consent_lede .ClientName .Acct .Domain}}</p>
 <p>{{.T.consent_shares}}</p>
 <ul class="shares">{{range .Shares}}<li>{{.}}</li>{{end}}</ul>
+{{if .LinkAcct}}<section class="link-box" aria-labelledby="link-title">
+  <h2 id="link-title">{{printf .T.link_title .ClientName}}</h2>
+  <p>{{printf .T.link_lede .LinkAcct .ClientName .Domain}}</p>
+  <ul>
+    <li>{{.T.link_keep}}</li>
+    <li>{{printf .T.link_only .ClientName .Domain}}</li>
+    <li>{{printf .T.link_password .ClientName}}</li>
+  </ul>
+</section>{{end}}
 <form method="post" action="/consent" class="consent">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <input type="hidden" name="request" value="{{.RequestID}}">
-  <button type="submit" name="decision" value="allow">{{.T.allow}}</button>
+  {{if .LinkAcct}}<input type="hidden" name="link" value="{{.LinkID}}">
+  <button type="submit" name="decision" value="allow">{{.T.link_allow}}</button>{{else}}
+  <button type="submit" name="decision" value="allow">{{.T.allow}}</button>{{end}}
   <button type="submit" name="decision" value="deny" class="secondary">{{.T.deny}}</button>
 </form>
-<p class="note">{{.T.consent_note}}</p>
+{{if .LinkAcct}}<p class="note">{{printf .T.link_note .ClientName}}</p>{{else}}<p class="note">{{.T.consent_note}}</p>{{end}}
 {{template "foot" .}}

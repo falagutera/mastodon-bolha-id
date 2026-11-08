@@ -235,7 +235,7 @@ func (e *testEnv) get(b *http.Client, path string, q url.Values) (*http.Response
 	return resp, string(body)
 }
 
-var hiddenRe = regexp.MustCompile(`name="(csrf|request)" value="([^"]+)"`)
+var hiddenRe = regexp.MustCompile(`name="(csrf|request|link)" value="([^"]+)"`)
 
 // consent submits the consent form found in a page.
 func (e *testEnv) consent(b *http.Client, page, decision string) *http.Response {

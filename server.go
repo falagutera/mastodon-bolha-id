@@ -32,10 +32,37 @@ type server struct {
 	keys    *keySet
 	clients clientList
 	now     func() time.Time
+	// linkers by client id, for clients with account_link.
+	linkers map[string]accountLinker
 }
 
 func newServer(cfg config, tmpl *template.Template, api *mastodon, db *store, rdb *redis.Client, keys *keySet, clients clientList) *server {
-	return &server{cfg: cfg, tmpl: tmpl, api: api, db: db, rdb: rdb, kv: kv{rdb: rdb}, keys: keys, clients: clients, now: time.Now}
+	return &server{cfg: cfg, tmpl: tmpl, api: api, db: db, rdb: rdb, kv: kv{rdb: rdb}, keys: keys, clients: clients, now: time.Now,
+		linkers: map[string]accountLinker{}}
+}
+
+// setupLinkers connects the clients that have account_link. Without its
+// database settings a client just signs in without the linking offer.
+func (s *server) setupLinkers(ctx context.Context) error {
+	var peertube *peertubeLinker
+	for _, c := range s.clients {
+		switch c.AccountLink {
+		case "peertube":
+			if s.cfg.peertubeDSN == "" {
+				log.Printf("warning: client %q has account_link peertube but ID_LINK_PEERTUBE_DSN is not set; linking is off", c.ID)
+				continue
+			}
+			if peertube == nil {
+				var err error
+				if peertube, err = openPeerTubeLinker(ctx, s.cfg.peertubeDSN, s.cfg.peertubePlugin); err != nil {
+					return err
+				}
+			}
+			s.linkers[c.ID] = peertube
+			log.Printf("client %q: account linking with PeerTube on", c.ID)
+		}
+	}
+	return nil
 }
 
 func (s *server) routes() http.Handler {
@@ -191,6 +218,9 @@ type viewData struct {
 	Shares     []string
 	RequestID  string
 	CSRF       string
+	// Offer to link an existing account in the tool (consent page).
+	LinkAcct string
+	LinkID   string
 	// Logout confirmation page.
 	ClientID     string
 	LogoutTarget string

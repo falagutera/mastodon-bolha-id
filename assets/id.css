@@ -18,3 +18,8 @@ button.link { background: none; border: 0; color: inherit; text-decoration: unde
 .session { display: flex; gap: .5rem; align-items: center; color: var(--muted); }
 .note { color: var(--muted); font-size: 0.92rem; }
 .foot { display: flex; gap: 1rem; flex-wrap: wrap; }
+.link-box { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; }
+.link-box h2 { margin: 0; font-size: 1.1rem; }
+.link-box p, .link-box ul { margin: 0; }
+.link-box ul { padding-left: 1.1rem; }
+.link-box li { margin: .25rem 0; }

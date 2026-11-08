@@ -29,7 +29,10 @@ type client struct {
 	AllowNoPKCEOrNonce bool `json:"allow_no_pkce_or_nonce,omitempty"`
 	// LowercaseUsername sends preferred_username in lower case, for apps that
 	// only accept lower-case usernames (PeerTube).
-	LowercaseUsername      bool     `json:"lowercase_username,omitempty"`
+	LowercaseUsername bool `json:"lowercase_username,omitempty"`
+	// AccountLink names how the consent page can link the person's existing
+	// password account in this tool ("peertube"); see link.go.
+	AccountLink            string   `json:"account_link,omitempty"`
 	RedirectURIs           []string `json:"redirect_uris"`
 	PostLogoutRedirectURIs []string `json:"post_logout_redirect_uris,omitempty"`
 
@@ -72,6 +75,9 @@ func parseClients(data []byte, getenv func(string) string) (clientList, error) {
 			if err := checkRedirect(u, c.Dev); err != nil {
 				return nil, fmt.Errorf("client %q: %s: %w", c.ID, u, err)
 			}
+		}
+		if c.AccountLink != "" && !slices.Contains(linkKinds, c.AccountLink) {
+			return nil, fmt.Errorf("client %q: account_link must be one of %v", c.ID, linkKinds)
 		}
 		switch {
 		case c.Public && c.AllowNoPKCEOrNonce:
