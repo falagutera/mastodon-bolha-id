@@ -320,7 +320,7 @@ The tests delete data: they only accept a database whose name ends in `_test`, a
 
 ## License
 
-AGPL-3.0, see [LICENSE](LICENSE). Fonts: see [NOTICE](NOTICE).
+AGPL-3.0, see [LICENSE](LICENSE).
 
 ## Bot account
 

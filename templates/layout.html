@@ -5,30 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <title>{{.T.title}} · {{.Domain}}</title>
-<link rel="stylesheet" href="/assets/artefatos.css">
-<link rel="stylesheet" href="/assets/id.css">
+<link rel="stylesheet" href="/assets/id.css?v={{.Version}}">
 </head>
 <body>
 <div class="wrap">
-<header>
-  <div class="topbar">
-    <a class="eyebrow" href="/">{{.T.title}} · {{.Domain}}</a>
-    <span class="toplinks">
-    <a class="notes-link{{if eq .Nav "notes"}} on{{end}}" href="/release-notes"{{if eq .Nav "notes"}} aria-current="page"{{end}}>{{.T.nav_notes}}</a>
+<header class="top">
+  <a class="brand" href="/"><span class="bubble"></span>{{.T.title}}</a>
+  <span class="toplinks">
+    <a class="toggle{{if eq .Nav "notes"}} on{{end}}" href="/release-notes"{{if eq .Nav "notes"}} aria-current="page"{{end}}>{{.T.nav_notes}}</a>
     <span class="langsel" role="group" aria-label="{{.T.language}}">
-      <a href="/?lang=pt" hreflang="pt-BR"{{if eq .T.lang "pt-BR"}} class="on" aria-current="true"{{end}}>PT</a>
-      <a href="/?lang=en" hreflang="en"{{if eq .T.lang "en"}} class="on" aria-current="true"{{end}}>EN</a>
+      <a href="/?lang=pt" hreflang="pt-BR"{{if eq .T.lang "pt-BR"}} class="on" aria-current="true"{{end}}>PT</a>·<a href="/?lang=en" hreflang="en"{{if eq .T.lang "en"}} class="on" aria-current="true"{{end}}>EN</a>
     </span>
-    </span>
-  </div>
+  </span>
 </header>
 <main>
 {{end}}
 {{define "foot"}}</main>
-<footer class="foot">
-  <a href="https://gitlab.gutocarvalho.net/open/bolha/id">{{.T.source}}</a>
-  <a class="version" href="https://gitlab.gutocarvalho.net/images/id/container_registry">id {{.Version}}</a>
-</footer>
+<footer>id {{.Version}} · <a href="https://gitlab.gutocarvalho.net/open/bolha/id">{{.T.source}}</a> · {{.T.part_of}} <a href="https://bolha.io">bolha.io</a></footer>
 </div>
 </body>
 </html>

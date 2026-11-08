@@ -43,7 +43,9 @@ var translations = map[string]map[string]string{
 		"error_instance":        "The instance didn't answer as expected. Try again in a moment.",
 		"error_refused":         "This account can't sign in here.",
 		"error_refused_pending": "This account can't sign in yet: it needs to be approved and to have its e-mail confirmed on the instance.",
-		"source":                "Source code",
+		"source":                "source code",
+		"kicker":                "bolha.io · sign-in", "hero": "Sign in with your account on", "how_title": "How it works", "privacy_title": "Privacy",
+		"consent_a": "Allow", "consent_b": "access", "part_of": "part of",
 	},
 	"pt-BR": {
 		"lang": "pt-BR", "title": "id", "language": "Idioma", "nav_notes": "Novidades", "notes_title": "Novidades", "notes_lede": "O que mudou em cada versão.",
@@ -79,7 +81,9 @@ var translations = map[string]map[string]string{
 		"error_instance":        "A instância não respondeu como esperado. Tente de novo daqui a pouco.",
 		"error_refused":         "Esta conta não pode entrar aqui.",
 		"error_refused_pending": "Esta conta ainda não pode entrar: ela precisa estar aprovada e com o e-mail confirmado na instância.",
-		"source":                "Código-fonte",
+		"source":                "código",
+		"kicker":                "bolha.io · login", "hero": "Entre com sua conta do", "how_title": "Como funciona", "privacy_title": "Privacidade",
+		"consent_a": "Autorizar", "consent_b": "acesso", "part_of": "parte da",
 	},
 }
 

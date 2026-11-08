@@ -66,7 +66,7 @@ where `e.get(b, "/authorize", authParams(...))` returns the consent HTML (write 
 | `keys.go`, `crypto.go` | RS256 sign/verify, JWKS, key rotation; random tokens, `hashID`, constant-time `equal`, `s256` |
 | `store.go` | consents and the audit log (`auditText` strips control chars, 200 chars) |
 | `link.go` | PeerTube account linking (`docs/account-linking.md`) |
-| `i18n.go` | every text, in `en` and `pt-BR`; `templates/`, `assets/` (CSS, fonts) |
+| `i18n.go` | every text, in `en` and `pt-BR`; `templates/`, `assets/id.css` (the bolha.io look: same tokens as numeros, light and dark, system fonts) |
 | `version.go`, `internal/relnotes` | `VERSION` + build, `CHANGELOG.md` as `/release-notes` |
 
 Tests: `unit_test.go` (no services: clients file `testClientsJSON`, keys, discovery, authorize

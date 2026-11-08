@@ -1,8 +1,13 @@
 {{template "head" .}}
-<h1>{{.T.consent_title}}</h1>
-<p class="lede">{{printf .T.consent_lede .ClientName .Acct .Domain}}</p>
-<p>{{.T.consent_shares}}</p>
-<ul class="shares">{{range .Shares}}<li>{{.}}</li>{{end}}</ul>
+<section class="hero">
+  <p class="kicker">{{.T.kicker}}</p>
+  <h1>{{.T.consent_a}} <em>{{.T.consent_b}}</em>?</h1>
+  <p class="lede">{{printf .T.consent_lede .ClientName .Acct .Domain}}</p>
+</section>
+<div class="card">
+  <div class="app"><span class="ico">{{printf "%.3s" .ClientName}}</span><div><b>{{.ClientName}}</b><div class="sub">{{.T.consent_shares}}</div></div></div>
+  <ul class="checks shares">{{range .Shares}}<li>{{.}}</li>{{end}}</ul>
+</div>
 {{if .LinkAcct}}<section class="link-box" aria-labelledby="link-title">
   <h2 id="link-title">{{printf .T.link_title .ClientName}}</h2>
   <p>{{printf .T.link_lede .LinkAcct .ClientName .Domain}}</p>
@@ -12,7 +17,7 @@
     <li>{{printf .T.link_password .ClientName}}</li>
   </ul>
 </section>{{end}}
-<form method="post" action="/consent" class="consent">
+<form method="post" action="/consent" class="consent actions">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <input type="hidden" name="request" value="{{.RequestID}}">
   {{if .LinkAcct}}<input type="hidden" name="link" value="{{.LinkID}}">
