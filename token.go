@@ -517,7 +517,7 @@ func (s *server) mintTokens(ctx context.Context, c *client, g grant, p person) (
 	resp = tokenResponse{AccessToken: access, TokenType: "Bearer", ExpiresIn: int(accessTTL.Seconds()), Scope: strings.Join(g.Scopes, " ")}
 	if slices.Contains(g.Scopes, "openid") {
 		claims := idClaims{Iss: s.cfg.issuer, Sub: p.ID, Aud: c.ID, Exp: now.Add(idTokenTTL).Unix(), Iat: now.Unix(),
-			AuthTime: g.AuthTime, Nonce: g.Nonce, Sid: g.Family, userClaims: s.claimsOf(p, g.Scopes)}
+			AuthTime: g.AuthTime, Nonce: g.Nonce, Sid: g.Family, userClaims: s.claimsOf(c, p, g.Scopes)}
 		if resp.IDToken, err = s.keys.sign(claims); err != nil {
 			return resp, keys, fmt.Errorf("%w: %v", errSign, err)
 		}
@@ -549,11 +549,15 @@ type userClaims struct {
 }
 
 // claimsOf builds the claims. groups/role only come from ID_ROLE_GROUPS: role
-// names on the instance are free text and can be renamed.
-func (s *server) claimsOf(p person, scopes []string) userClaims {
+// names on the instance are free text and can be renamed. c may be nil.
+func (s *server) claimsOf(c *client, p person, scopes []string) userClaims {
 	var u userClaims
 	if slices.Contains(scopes, "profile") {
 		u.PreferredUsername, u.Name, u.Picture, u.Profile = p.Username, p.Name, p.Avatar, p.URL
+		if c != nil && c.LowercaseUsername {
+			// Mastodon usernames are unique ignoring case, so this can't collide.
+			u.PreferredUsername = strings.ToLower(u.PreferredUsername)
+		}
 	}
 	if slices.Contains(scopes, "email") {
 		verified := p.Confirmed
@@ -632,7 +636,7 @@ func (s *server) handleUserinfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		Sub string `json:"sub"`
 		userClaims
-	}{p.ID, s.claimsOf(p, g.Scopes)})
+	}{p.ID, s.claimsOf(s.clients[g.ClientID], p, g.Scopes)})
 }
 
 // --- logout -----------------------------------------------------------------

@@ -192,6 +192,7 @@ Clients are in a JSON file (a ConfigMap in k8s), loaded at startup. See `clients
   Generate secrets with `openssl rand -base64 32`. They are compared as SHA-256 hashes, so they must be random: don't use passwords.
 - `"public": true` for apps that can't keep a secret (SPAs, desktop). They must use PKCE S256.
 - Confidential clients must send a PKCE `code_challenge` (S256), a `nonce`, or both; a request with neither is refused. When they send a `code_challenge`, the verifier is required.
+- `"lowercase_username": true` sends `preferred_username` in lower case, for apps that only accept lower-case usernames (PeerTube). Mastodon usernames are unique ignoring case, so this cannot make two people share a name.
 - `"allow_no_pkce_or_nonce": true` (confidential clients only; refused on a public client at startup; off by default) lets a client sign in with neither, for RP libraries that only send `state`, such as passport-openidconnect 0.1.x (Overleaf). Whatever PKCE or nonce such a client does send is still checked. The app logs a warning at startup for each client that has it. Remove it as soon as the tool supports PKCE; see the security notes.
 - `post_logout_redirect_uris`: where `/logout` may send people back. Without it, logout shows a page here.
 

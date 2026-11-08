@@ -26,7 +26,10 @@ type client struct {
 	Dev          bool   `json:"dev,omitempty"`    // allows http://localhost redirect URIs
 	// AllowNoPKCEOrNonce lets a confidential client whose library sends neither
 	// PKCE nor a nonce (only state) sign in. Remove it once the client supports PKCE.
-	AllowNoPKCEOrNonce     bool     `json:"allow_no_pkce_or_nonce,omitempty"`
+	AllowNoPKCEOrNonce bool `json:"allow_no_pkce_or_nonce,omitempty"`
+	// LowercaseUsername sends preferred_username in lower case, for apps that
+	// only accept lower-case usernames (PeerTube).
+	LowercaseUsername      bool     `json:"lowercase_username,omitempty"`
 	RedirectURIs           []string `json:"redirect_uris"`
 	PostLogoutRedirectURIs []string `json:"post_logout_redirect_uris,omitempty"`
 

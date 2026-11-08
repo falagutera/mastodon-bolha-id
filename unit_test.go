@@ -283,3 +283,19 @@ func TestRefusal(t *testing.T) {
 		t.Error("silenced handling")
 	}
 }
+
+// A client with lowercase_username gets preferred_username in lower case; others keep the case.
+func TestLowercaseUsernameClient(t *testing.T) {
+	s := unitServer(t)
+	p := person{ID: "1", Username: "FulanoX"}
+	scopes := []string{"openid", "profile"}
+	if c := s.claimsOf(&client{ID: "tube", LowercaseUsername: true}, p, scopes); c.PreferredUsername != "fulanox" {
+		t.Fatalf("lowercase client: %q", c.PreferredUsername)
+	}
+	if c := s.claimsOf(&client{ID: "blog"}, p, scopes); c.PreferredUsername != "FulanoX" {
+		t.Fatalf("plain client: %q", c.PreferredUsername)
+	}
+	if c := s.claimsOf(nil, p, scopes); c.PreferredUsername != "FulanoX" {
+		t.Fatalf("nil client: %q", c.PreferredUsername)
+	}
+}

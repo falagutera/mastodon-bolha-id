@@ -3,6 +3,10 @@
 All notable changes to id. Versions follow [SemVer](https://semver.org/); images are
 published as `registry.gutocarvalho.net/images/id:<version>-<build>`.
 
+## 0.1.3 — 2026-11-08
+
+- A client can ask for `preferred_username` in lower case (`"lowercase_username": true` in the clients file), for apps that only accept lower-case usernames, such as PeerTube. Other clients keep the username as it is on the instance.
+
 ## 0.1.2 — 2026-11-07
 
 Hardening from the updated linters.

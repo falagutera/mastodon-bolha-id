@@ -315,14 +315,14 @@ func TestRoleGroupsMapping(t *testing.T) {
 	s := unitServer(t)
 	s.cfg.roleGroups = map[string]string{"3": "admin"}
 	p := person{ID: "1", RoleID: "2"}
-	if c := s.claimsOf(p, []string{"openid", "profile", "groups"}); c.Groups != nil || c.Role != "" {
+	if c := s.claimsOf(nil, p, []string{"openid", "profile", "groups"}); c.Groups != nil || c.Role != "" {
 		t.Fatalf("unmapped role emitted: %+v", c)
 	}
 	p.RoleID = "3"
-	if c := s.claimsOf(p, []string{"openid", "groups"}); len(c.Groups) != 1 || c.Groups[0] != "admin" || c.Role != "admin" {
+	if c := s.claimsOf(nil, p, []string{"openid", "groups"}); len(c.Groups) != 1 || c.Groups[0] != "admin" || c.Role != "admin" {
 		t.Fatalf("mapped role: %+v", c)
 	}
-	if c := s.claimsOf(p, []string{"openid", "email"}); c.Groups != nil {
+	if c := s.claimsOf(nil, p, []string{"openid", "email"}); c.Groups != nil {
 		t.Fatalf("groups without the scope: %+v", c)
 	}
 	if _, err := parseRoleGroups(`{"3":"has space"}`); err == nil {
