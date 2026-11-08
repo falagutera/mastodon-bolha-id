@@ -24,8 +24,8 @@ test:
   before_script:
     - apk add --no-cache postgresql17-client
     - until pg_isready -h postgres -U postgres; do sleep 1; done
-    - psql -h postgres -U postgres -c "CREATE ROLE id LOGIN PASSWORD 'id'" -c "CREATE DATABASE id"
-    - psql -h postgres -U postgres -d id -v ON_ERROR_STOP=1 -f schema.sql
+    - psql -h postgres -U postgres -c "CREATE ROLE id LOGIN PASSWORD 'id'" -c "CREATE DATABASE id_test"
+    - psql -h postgres -U postgres -d id_test -v ON_ERROR_STOP=1 -f schema.sql
   script:
     - go vet ./...
     - test -z "$(gofmt -l .)"

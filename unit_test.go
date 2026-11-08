@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"io/fs"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -66,6 +68,36 @@ func TestTranslationsHaveSameKeys(t *testing.T) {
 	for k := range pt {
 		if _, ok := en[k]; !ok {
 			t.Errorf("en misses %q", k)
+		}
+	}
+}
+
+// The CSP allows no inline script or style: the templates must have none, and
+// every page must carry the strict policy.
+func TestNoInlineScriptOrStyle(t *testing.T) {
+	inline := regexp.MustCompile(`(?i)<script(\s[^>]*)?>\s*[^<\s]|<style|\sstyle\s*=|\son[a-z]+\s*=|javascript:`)
+	files, err := fs.Glob(templateFS, "templates/*.html")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("templates: %v", err)
+	}
+	for _, f := range files {
+		b, err := fs.ReadFile(templateFS, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m := inline.Find(b); m != nil {
+			t.Errorf("%s: inline script or style: %q", f, m)
+		}
+	}
+	s := unitServer(t)
+	for _, path := range []string{"/", "/release-notes", "/authorize"} {
+		rec := httptest.NewRecorder()
+		s.routes().ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		csp := rec.Header().Get("Content-Security-Policy")
+		for _, want := range []string{"default-src 'none'", "script-src 'self';", "style-src 'self';", "frame-ancestors 'none'"} {
+			if !strings.Contains(csp, want) {
+				t.Errorf("%s: CSP %q misses %q", path, csp, want)
+			}
 		}
 	}
 }

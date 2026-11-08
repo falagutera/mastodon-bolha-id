@@ -119,9 +119,9 @@ func TestPeerTubeLinkerSQL(t *testing.T) {
 	if host == "" || admin == "" {
 		t.Skip("ID_TEST_DB_HOST and PGPASSWORD not set")
 	}
-	port := env("ID_TEST_DB_PORT", "5432")
+	port, db := env("ID_TEST_DB_PORT", "5432"), testDBName(t)
 	ctx := context.Background()
-	su, err := pgx.Connect(ctx, (&url.URL{Scheme: "postgres", User: url.UserPassword("postgres", admin), Host: net.JoinHostPort(host, port), Path: "/id", RawQuery: "sslmode=disable"}).String())
+	su, err := pgx.Connect(ctx, (&url.URL{Scheme: "postgres", User: url.UserPassword("postgres", admin), Host: net.JoinHostPort(host, port), Path: "/" + db, RawQuery: "sslmode=disable"}).String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestPeerTubeLinkerSQL(t *testing.T) {
 	t.Cleanup(func() {
 		su.Exec(ctx, `DROP SCHEMA IF EXISTS pt_test CASCADE`) //nolint:errcheck
 	})
-	dsn := (&url.URL{Scheme: "postgres", User: url.UserPassword("pt_link_test", "pt"), Host: net.JoinHostPort(host, port), Path: "/id",
+	dsn := (&url.URL{Scheme: "postgres", User: url.UserPassword("pt_link_test", "pt"), Host: net.JoinHostPort(host, port), Path: "/" + db,
 		RawQuery: "sslmode=disable&search_path=pt_test"}).String()
 	l, err := openPeerTubeLinker(ctx, dsn, "peertube-plugin-auth-openid-connect")
 	if err != nil {

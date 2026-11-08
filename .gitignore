@@ -4,3 +4,4 @@ data/
 /id
 clients.json
 *.pem
+.claude/worktrees/

@@ -26,7 +26,7 @@ This app decides who gets into other tools, so it is tested and reviewed as a se
   - `trivy`: critical vulnerabilities that have a fix, secrets and misconfigurations in the repository.
 - Informative (reported, not blocking): `semgrep`, `gosec`, `hadolint` (Dockerfile), `yamllint`, and `poutine` (security of the CI pipeline itself). At 0.1.0 they report nothing at the thresholds the pipeline uses; the few `gosec`/`semgrep` false positives are annotated in the code with the reason.
 
-**The test suite.** 46 tests, all run with the race detector (`go test -race`). Most run the real HTTP handlers end to end against a fake Mastodon server, PostgreSQL and Redis:
+**The test suite.** 51 tests, all run with the race detector (`go test -race`). Most run the real HTTP handlers end to end against a fake Mastodon server, PostgreSQL and Redis:
 
 - the full OpenID Connect flow: authorize, sign-in on the instance, consent, token, `id_token` signature checked against the published JWKS, userinfo, and that the person's Mastodon token is revoked;
 - redirect URIs: exact match only, and errors before validation never redirect;
@@ -308,11 +308,15 @@ The flow tests run the whole sign-in against a fake Mastodon and need PostgreSQL
 ```sh
 docker run -d --rm --name id-pg -p 55432:5432 -e POSTGRES_PASSWORD=admin postgres:17-alpine
 docker run -d --rm --name id-redis -p 56379:6379 redis:7.4-alpine
-docker exec id-pg psql -U postgres -c "CREATE ROLE id LOGIN PASSWORD 'id'" -c "CREATE DATABASE id"
-docker exec -i id-pg psql -U postgres -d id < schema.sql
-ID_TEST_DB_HOST=127.0.0.1 ID_TEST_DB_PORT=55432 ID_TEST_REDIS=127.0.0.1:56379 go test -p 1 ./...
+docker exec id-pg psql -U postgres -c "CREATE ROLE id LOGIN PASSWORD 'id'" -c "CREATE DATABASE id_test"
+docker exec -i id-pg psql -U postgres -d id_test < schema.sql
+ID_TEST_DB_HOST=127.0.0.1 ID_TEST_DB_PORT=55432 ID_TEST_REDIS=127.0.0.1:56379 PGPASSWORD=admin go test -p 1 ./...
 docker rm -f id-pg id-redis
 ```
+
+The tests delete data: they only accept a database whose name ends in `_test`, and flush Redis database 15, never 0.
+
+[AGENTS.md](AGENTS.md) is the guide for changing the code, for people and for coding agents (Claude Code, Codex, Cursor and others read it): the exact test commands, a map of the files and their tests, and the rules a change must keep (exact redirect URIs, single-use bound codes, token families, which accounts may sign in, CSRF, CSP, both languages), each with the test that guards it. `CLAUDE.md` only points to it.
 
 ## License
 

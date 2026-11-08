@@ -17,6 +17,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -164,6 +165,29 @@ type testEnv struct {
 	jwks []jwk
 }
 
+// testDBName is the database the tests use (ID_TEST_DB_NAME, default id_test).
+// They delete its consents and drop and create schemas in it, so they refuse a
+// name that doesn't end in _test: never point them at a real database.
+func testDBName(t *testing.T) string {
+	t.Helper()
+	name := env("ID_TEST_DB_NAME", "id_test")
+	if !strings.HasSuffix(name, "_test") {
+		t.Fatalf("ID_TEST_DB_NAME=%q: the tests delete data, so the database name must end in _test", name)
+	}
+	return name
+}
+
+// testRedisDB is the Redis database index the tests flush (ID_TEST_REDIS_DB,
+// default 15). The app always uses index 0, so the tests refuse it.
+func testRedisDB(t *testing.T) int {
+	t.Helper()
+	n, err := strconv.Atoi(env("ID_TEST_REDIS_DB", "15"))
+	if err != nil || n < 1 || n > 15 {
+		t.Fatalf("ID_TEST_REDIS_DB must be 1 to 15 (the tests flush it; the app uses 0)")
+	}
+	return n
+}
+
 // newTestEnv needs Postgres and Redis: set ID_TEST_DB_HOST and ID_TEST_REDIS.
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
@@ -179,7 +203,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	cfg := config{issuer: app.URL, instance: inst.URL, domain: "example.social", lang: "en", allowSilenced: true,
 		roleGroups: map[string]string{"2": "moderator"},
 		sessionTTL: 12 * time.Hour, refreshTTL: 24 * time.Hour,
-		dbHost: dbHost, dbPort: env("ID_TEST_DB_PORT", "5432"), dbUser: "id", dbPassword: "id", dbName: "id", dbSSLMode: "disable"}
+		dbHost: dbHost, dbPort: env("ID_TEST_DB_PORT", "5432"), dbUser: "id", dbPassword: "id", dbName: testDBName(t), dbSSLMode: "disable"}
 	ctx := context.Background()
 	db, err := openStore(ctx, cfg)
 	if err != nil {
@@ -192,8 +216,11 @@ func newTestEnv(t *testing.T) *testEnv {
 	if _, err := db.pool.Exec(ctx, `DELETE FROM consents`); err != nil {
 		t.Fatal(err)
 	}
-	rdb := redis.NewClient(&redis.Options{Addr: addr})
-	rdb.FlushDB(ctx)
+	rdb := redis.NewClient(&redis.Options{Addr: addr, DB: testRedisDB(t)})
+	t.Cleanup(func() { rdb.Close() })
+	if err := rdb.FlushDB(ctx).Err(); err != nil {
+		t.Fatal(err)
+	}
 	tmpl, err := parseTemplates()
 	if err != nil {
 		t.Fatal(err)
