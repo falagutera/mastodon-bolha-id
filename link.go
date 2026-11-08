@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -34,7 +35,10 @@ type accountLinker interface {
 	link(ctx context.Context, c linkCandidate, email, sub string) error
 }
 
-var errLinkGone = errors.New("account changed meanwhile")
+var (
+	errLinkGone  = errors.New("account changed meanwhile")
+	errLinkTaken = errors.New("another account in the tool is already linked to this person")
+)
 
 const linkTimeout = 3 * time.Second
 
@@ -97,6 +101,11 @@ func (l *peertubeLinker) link(ctx context.Context, c linkCandidate, email, sub s
 		`UPDATE "user" SET "pluginAuth" = $1, "pluginAuthExternalId" = $2
 		 WHERE id = $3 AND lower(email) = lower($4) AND "pluginAuth" IS NULL AND role = $5 AND blocked = false`,
 		l.plugin, sub, c.ID, email, peertubeRoleUser)
+	if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		// PeerTube's unique (pluginAuth, pluginAuthExternalId): this person
+		// already has another account there that signs in through here.
+		return errLinkTaken
+	}
 	if err != nil {
 		return err
 	}

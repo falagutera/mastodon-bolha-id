@@ -3,6 +3,13 @@
 All notable changes to id. Versions follow [SemVer](https://semver.org/); images are
 published as `registry.gutocarvalho.net/images/id:<version>-<build>`.
 
+## 0.2.1 — 2026-11-08
+
+From the security review (scanners, code review and a Strix pass, which found no exploitable issue):
+
+- Linking reads the account fresh from the instance when the form is sent, so a just-changed or unconfirmed e-mail can't be used.
+- When the person already has another account in the tool linked here, the page says so (PeerTube allows one per person) instead of "temporarily unavailable".
+
 ## 0.2.0 — 2026-11-08
 
 - Account linking with PeerTube: for a client with `"account_link": "peertube"`, the consent page offers to link the person's existing password account there (same e-mail as their confirmed one on the instance), so they solve it themselves instead of hitting "invalid credentials". Ordinary accounts only; admins and moderators stay with the admins. Uses a database role that can only read a few columns and change the auth plugin of an account (`ID_LINK_PEERTUBE_DSN`, see docs/account-linking.md). Each link is in the audit log.

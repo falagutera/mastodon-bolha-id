@@ -380,6 +380,16 @@ func (s *server) handleConsent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if want := r.PostFormValue("link"); want != "" {
+		// Read the account fresh from the instance: the e-mail and its
+		// confirmation decide which account gets linked.
+		p, err = s.person(ctx, sess.AccountID, 0)
+		if err != nil || p.refusal(s.cfg.allowSilenced) != "" {
+			if err != nil && !errors.Is(err, errNoAccount) {
+				log.Printf("admin account %s: %v", sess.AccountID, err)
+			}
+			s.renderErrorLang(w, r, http.StatusForbidden, "refused", req.Lang)
+			return
+		}
 		l := s.linkers[c.ID]
 		cand, ok := s.linkOffer(ctx, c, p)
 		if l == nil || !ok || cand.key() != want {
@@ -389,6 +399,10 @@ func (s *server) handleConsent(w http.ResponseWriter, r *http.Request) {
 		if err := l.link(ctx, cand, p.Email, p.ID); err != nil {
 			if errors.Is(err, errLinkGone) {
 				s.renderErrorLang(w, r, http.StatusConflict, "link_gone", req.Lang)
+				return
+			}
+			if errors.Is(err, errLinkTaken) {
+				s.renderErrorLang(w, r, http.StatusConflict, "link_taken", req.Lang)
 				return
 			}
 			log.Printf("link %s: %v", c.ID, err)

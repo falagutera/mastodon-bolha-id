@@ -132,6 +132,7 @@ func TestPeerTubeLinkerSQL(t *testing.T) {
 		`CREATE SCHEMA pt_test`,
 		`CREATE TABLE pt_test."user" (id serial PRIMARY KEY, username text NOT NULL, email text NOT NULL, password text,
 		  role int NOT NULL DEFAULT 2, blocked boolean NOT NULL DEFAULT false, "pluginAuth" text, "pluginAuthExternalId" text)`,
+		`CREATE UNIQUE INDEX pt_user_plugin_ext ON pt_test."user" ("pluginAuth", "pluginAuthExternalId") WHERE "pluginAuthExternalId" IS NOT NULL`,
 		`CREATE TABLE pt_test."oAuthToken" (id serial PRIMARY KEY, "accessToken" text, "userId" int NOT NULL)`,
 		`INSERT INTO pt_test."user" (username, email, password, role, blocked, "pluginAuth") VALUES
 		  ('ana', 'Ana@Mail.example', 'h', 2, false, NULL),
@@ -190,6 +191,14 @@ func TestPeerTubeLinkerSQL(t *testing.T) {
 	su.QueryRow(ctx, `SELECT count(*) FILTER (WHERE "userId" = 1), count(*) FILTER (WHERE "userId" <> 1) FROM pt_test."oAuthToken"`).Scan(&tokens, &others)
 	if plugin != "peertube-plugin-auth-openid-connect" || ext != "109" || tokens != 0 || others != 1 {
 		t.Fatalf("after link: plugin=%q ext=%q tokens=%d others=%d", plugin, ext, tokens, others)
+	}
+	// The same person can't have two linked accounts (PeerTube's unique index).
+	c2, ok, _ := l.find(ctx, "bob@mail.example")
+	if !ok {
+		t.Fatal("bob not offered")
+	}
+	if err := l.link(ctx, c2, "bob@mail.example", "109"); !errors.Is(err, errLinkTaken) {
+		t.Fatalf("second account for the same sub: %v", err)
 	}
 	// Twice: already linked.
 	if err := l.link(ctx, c, "ana@mail.example", "109"); !errors.Is(err, errLinkGone) {
