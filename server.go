@@ -126,7 +126,7 @@ func cors(next http.Handler) http.Handler {
 // csp is the page policy. Only form-action varies: the consent form ends at the
 // client's redirect URI, and browsers check form-action across redirects.
 func csp(formAction string) string {
-	return "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action " +
+	return "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action " +
 		formAction + "; frame-ancestors 'none'"
 }
 

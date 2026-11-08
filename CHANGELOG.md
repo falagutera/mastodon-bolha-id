@@ -3,6 +3,10 @@
 All notable changes to id. Versions follow [SemVer](https://semver.org/); images are
 published as `registry.gutocarvalho.net/images/id:<version>-<build>`.
 
+## 0.3.1 — 2026-11-08
+
+- The look now comes from `open/gcn/ui` (`assets/style.css`, a synced copy, and `VISUAL.md`); `assets/id.css` keeps only what is the id's own. The CSP no longer allows fonts (there are none).
+
 ## 0.3.0 — 2026-11-08
 
 - **The bolha.io look**, the same as numeros and atualiza: light and dark from the system, system fonts, the yellow accent, a heading with a kicker, sections as cards, the tools as chips, the consent screen with the tool and what it receives in a card, pill buttons, and the footer "version · source code · part of bolha.io". The IBM Plex webfonts and the shared artefatos stylesheet are gone. Nothing changes in the sign-in itself.

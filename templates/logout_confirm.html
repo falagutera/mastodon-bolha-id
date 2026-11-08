@@ -11,6 +11,6 @@
   {{if .State}}<input type="hidden" name="state" value="{{.State}}">{{end}}
   {{if .UILocales}}<input type="hidden" name="ui_locales" value="{{.UILocales}}">{{end}}
   <button type="submit">{{.T.logout}}</button>
-  <a class="button secondary" href="/">{{.T.home}}</a>
+  <a class="btn secondary" href="/">{{.T.home}}</a>
 </form>
 {{template "foot" .}}
