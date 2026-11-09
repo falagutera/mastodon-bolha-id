@@ -88,7 +88,9 @@ func (s *server) redirectTo(w http.ResponseWriter, r *http.Request, redirectURI 
 	}
 	q.Set("iss", s.cfg.issuer)
 	u.RawQuery = q.Encode()
-	http.Redirect(w, r, u.String(), status)
+	// Every caller passes a redirect_uri the client registered (allowsRedirect in
+	// authorize and again after consent), so this never sends the browser elsewhere.
+	http.Redirect(w, r, u.String(), status) // #nosec G710 -- registered redirect_uri only, see above
 }
 
 func (s *server) redirectError(w http.ResponseWriter, r *http.Request, redirectURI, state, code, description string, status int) {

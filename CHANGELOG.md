@@ -3,6 +3,10 @@
 All notable changes to id. Versions follow [SemVer](https://semver.org/); images are
 published as `registry.gutocarvalho.net/images/id:<version>-<build>`.
 
+## 0.3.2 — 2026-11-09
+
+- The two OIDC redirects are annotated for gosec (G710, open redirect): they only reach a `redirect_uri` or `post_logout_redirect_uri` the client registered, checked before. No behavior change.
+
 ## 0.3.1 — 2026-11-08
 
 - The look now comes from `open/gcn/ui` (`assets/style.css`, a synced copy, and `VISUAL.md`); `assets/id.css` keeps only what is the id's own. The CSP no longer allows fonts (there are none).

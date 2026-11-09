@@ -727,7 +727,7 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		}
 		u.RawQuery = q.Encode()
 		// Only a post_logout_redirect_uri registered for the client gets here.
-		http.Redirect(w, r, u.String(), http.StatusSeeOther) // nosemgrep: go.lang.security.injection.open-redirect.open-redirect
+		http.Redirect(w, r, u.String(), http.StatusSeeOther) // #nosec G710 -- allowsLogoutRedirect checked it against the client's list; nosemgrep: go.lang.security.injection.open-redirect.open-redirect
 		return
 	}
 	s.render(w, "logout.html", http.StatusOK, s.view(r, lang))
