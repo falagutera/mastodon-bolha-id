@@ -13,6 +13,23 @@ It exists because Mastodon is an OAuth 2 server but not an OpenID Connect provid
 - Audit log of sign-ins, consents, refusals and sign-outs, without tokens
 - Stateless replicas: everything lives in Redis and PostgreSQL
 
+## Contents
+
+- [Testing and security](#testing-and-security)
+- [Architecture](#architecture)
+- [How it works (protocol detail)](#how-it-works-protocol-detail)
+- [Endpoints](#endpoints)
+- [Configuration](#configuration)
+- [Registering a client](#registering-a-client)
+- [Setting up the instance side](#setting-up-the-instance-side)
+- [Database](#database)
+- [Security notes](#security-notes)
+- [Versions](#versions)
+- [Deploy notes](#deploy-notes)
+- [Development](#development)
+- [License](#license)
+- [Bot account](#bot-account)
+
 ## Testing and security
 
 This app decides who gets into other tools, so it is tested and reviewed as a security component. What is done today (2026-11-06):
