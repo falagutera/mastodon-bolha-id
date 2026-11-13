@@ -1,21 +1,76 @@
 {
   "clients": [
     {
+      "id": "overleaf",
+      "name": "Overleaf",
+      "secret_env": "ID_CLIENT_SECRET_OVERLEAF",
+      "redirect_uris": ["https://overleaf.example.social/oidc/login/callback"],
+      "post_logout_redirect_uris": ["https://overleaf.example.social/login"],
+      "allow_no_pkce_or_nonce": true
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "secret_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "redirect_uris": ["https://gitlab.example.org/users/auth/openid_connect/callback"]
+    },
+    {
+      "id": "peertube",
+      "name": "PeerTube",
+      "secret_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "redirect_uris": ["https://tube.example.social/plugins/auth-openid-connect/router/code-cb"],
+      "lowercase_username": true,
+      "account_link": "peertube"
+    },
+    {
+      "id": "pixelfed",
+      "name": "Pixelfed",
+      "secret_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "redirect_uris": ["https://photos.example.social/auth/oidc/callback"],
+      "lowercase_username": true,
+      "allow_no_pkce_or_nonce": true
+    },
+    {
+      "id": "freshrss",
+      "name": "FreshRSS",
+      "secret_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "redirect_uris": ["https://freshrss.example.social/i/oidc/"],
+      "lowercase_username": true
+    },
+    {
       "id": "penpot",
       "name": "Penpot",
-      "secret_env": "ID_CLIENT_SECRET_PENPOT",
-      "redirect_uris": ["https://penpot.example.social/api/auth/oauth/oidc/callback"]
-    },
-    {
-      "id": "leaf",
-      "name": "Leaf",
       "secret_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "redirect_uris": ["https://leaf.example.social/oidc/login/callback"],
-      "post_logout_redirect_uris": ["https://leaf.example.social/"]
+      "redirect_uris": ["https://penpot.example.social/api/auth/oidc/callback"],
+      "allow_no_pkce_or_nonce": true
     },
     {
-      "id": "some-spa",
-      "name": "Some single-page app",
+      "id": "zulip",
+      "name": "Zulip",
+      "secret_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "redirect_uris": ["https://zulip.example.social/complete/oidc/"]
+    },
+    {
+      "id": "hedgedoc",
+      "name": "HedgeDoc",
+      "secret_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "redirect_uris": ["https://notes.example.social/auth/oauth2/callback"]
+    },
+    {
+      "id": "cryptpad",
+      "name": "CryptPad",
+      "secret_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "redirect_uris": ["https://cryptpad.example.social/ssoauth"]
+    },
+    {
+      "id": "writefreely",
+      "name": "WriteFreely blog",
+      "secret_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "redirect_uris": ["https://blog.example.social/oauth/callback/generic"]
+    },
+    {
+      "id": "spa",
+      "name": "A single-page app",
       "public": true,
       "redirect_uris": ["https://spa.example.social/callback"]
     },

@@ -1,0 +1,64 @@
+# Quickstart. Put it behind your reverse proxy (ID_ISSUER must be https).
+#
+#   1. Register the OAuth app + service account on your instance   (see README > Install)
+#        cp .env.example .env     and fill ID_ISSUER, ID_INSTANCE, the Mastodon app and token
+#   2. openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out signing-key.pem
+#   3. cp clients.example.json clients.json     and register your clients
+#   4. docker compose up -d
+#
+# Postgres applies schema.sql on first boot only (an empty data dir). After an
+# upgrade that changes schema.sql, re-apply it by hand as the database owner.
+# The app connects as a limited role 'id'; the tables are owned by the superuser,
+# so the app can read/append but can't alter the schema.
+services:
+  id:
+    build: .
+    image: id:local
+    container_name: id
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # The bundled Postgres has no TLS; it's on the compose's private network.
+      # For an external database keep the default (require) in .env.
+      ID_DB_SSLMODE: disable
+    volumes:
+      - ./clients.json:/etc/id/clients.json:ro
+      # The container is nonroot (uid 65532): signing-key.pem must be readable by
+      # it, i.e. `chmod 0444 signing-key.pem` (see README > Install).
+      - ./signing-key.pem:/run/secrets/signing-key.pem:ro
+    read_only: true
+    tmpfs: ["/tmp:size=16m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    ports:
+      - "127.0.0.1:8080:8080"   # behind your HTTPS reverse proxy
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${ID_DB_NAME:-id}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD in .env}
+      # Used by the init script to create the limited app role.
+      ID_DB_PASSWORD: ${ID_DB_PASSWORD:?set ID_DB_PASSWORD in .env}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./contrib/initdb:/docker-entrypoint-initdb.d:ro
+      - ./schema.sql:/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${ID_DB_NAME:-id}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${ID_REDIS_PASSWORD:?set ID_REDIS_PASSWORD in .env}", "--save", "", "--appendonly", "no"]

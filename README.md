@@ -15,150 +15,65 @@ It exists because Mastodon is an OAuth 2 server but not an OpenID Connect provid
 
 ## Contents
 
-- [Testing and security](#testing-and-security)
-- [Architecture](#architecture)
-- [How it works (protocol detail)](#how-it-works-protocol-detail)
-- [Endpoints](#endpoints)
+- [How it works](#how-it-works)
+- [Install](#install)
 - [Configuration](#configuration)
 - [Registering a client](#registering-a-client)
 - [Setting up the instance side](#setting-up-the-instance-side)
+- [Endpoints](#endpoints)
+- [How it works (protocol detail)](#how-it-works-protocol-detail)
 - [Database](#database)
 - [Security notes](#security-notes)
-- [Versions](#versions)
+- [Architecture](#architecture)
+- [Testing and security](#testing-and-security)
 - [Deploy notes](#deploy-notes)
+- [Versions](#versions)
 - [Development](#development)
 - [License](#license)
 - [Bot account](#bot-account)
 
-## Testing and security
 
-This app decides who gets into other tools, so it is tested and reviewed as a security component. What is done today (2026-11-06):
+## How it works
+Mastodon can authenticate its accounts but doesn't speak OpenID Connect, the sign-in protocol most tools understand. `id` is the bridge:
 
-**Every pipeline.** GitLab CI ([`.gitlab-ci.yml`](.gitlab-ci.yml), plus the shared security stage from `open/gcn/ci-templates`, file `security.yml`) runs on every push. The test job runs on every pipeline; the security stage runs on every merge request and every push to `main`; the image is built and published only from `main`.
+1. the tool sends the person to `id` (`/authorize`);
+2. `id` sends them to the instance, where they sign in with their account;
+3. `id` checks the account is local, approved, confirmed and active, asks consent the first time, and sends them back to the tool signed in, with a standard `id_token`.
 
-- Blocking (the pipeline fails and no image is published):
-  - `go vet`, a `gofmt` check, and the full test suite against real PostgreSQL 17 and Redis 7.4 services;
-  - `govulncheck`: known vulnerabilities in Go code paths this app actually reaches;
-  - `gitleaks`: secrets committed to the repository;
-  - `trivy`: critical vulnerabilities that have a fix, secrets and misconfigurations in the repository.
-- Informative (reported, not blocking): `semgrep`, `gosec`, `hadolint` (Dockerfile), `yamllint`, and `poutine` (security of the CI pipeline itself). At 0.1.0 they report nothing at the thresholds the pipeline uses; the few `gosec`/`semgrep` false positives are annotated in the code with the reason.
+One password (the instance account's) for every connected tool; no separate sign-up or approval wait; and when an account is suspended on the instance, its access to the tools ends too. The protocol-level walk-through is in [How it works (protocol detail)](#how-it-works-protocol-detail).
 
-**The test suite.** 51 tests, all run with the race detector (`go test -race`). Most run the real HTTP handlers end to end against a fake Mastodon server, PostgreSQL and Redis:
+## Install
+`id` needs **PostgreSQL**, **Redis** (with a password), an **RSA signing key**, an **OAuth app + service account** on your instance, and to run **behind HTTPS** at the issuer URL. Configuration is all in environment variables ([`.env.example`](.env.example)); the clients are a JSON file ([`clients.example.json`](clients.example.json)).
 
-- the full OpenID Connect flow: authorize, sign-in on the instance, consent, token, `id_token` signature checked against the published JWKS, userinfo, and that the person's Mastodon token is revoked;
-- redirect URIs: exact match only, and errors before validation never redirect;
-- PKCE (S256 only, exact length, wrong or missing verifier), client authentication (wrong secret, another client's code, both methods at once), single-use codes;
-- consent and sign-out forms: CSRF token, same-origin check, form reused from another browser;
-- account status: suspended, disabled, unapproved, unconfirmed, remote, deleted and silenced accounts, at sign-in, refresh and userinfo;
-- token families: replayed codes and refresh tokens revoke their family, sign-out revokes the account's tokens, a hint-only sign-out revokes only its own family, rotation that fails halfway keeps the old token;
-- rate limits and failures of the instance or of Redis (the refresh token survives, the limiter doesn't fail open, concurrent lookups share one admin call);
-- signing keys: rotation, forged payloads, `alg: none`, short keys; configuration and clients-file validation; translations; release notes.
+First, set up the instance side (OAuth app, service account, signing key) — see [Setting up the instance side](#setting-up-the-instance-side).
 
-**Reviews before the first release.** An independent security code review against OpenID Connect Core, the OAuth 2.0 Security Best Current Practice (RFC 9700) and OWASP ASVS; two automated white-box penetration test runs with [Strix](https://github.com/usestrix/strix); and an automated review of each security-relevant commit. Every finding was fixed with a regression test (most are in `security_test.go`). The fixes are listed in the 0.1.0 entry of the [CHANGELOG](CHANGELOG.md) and in the commit history. These were done by the project, not by an outside auditor, and they don't certify anything: they are what we checked.
+### Docker
 
-**Reporting a vulnerability.** Write to contato@gutocarvalho.net. Please don't open a public issue for it.
+[`docker-compose.yml`](docker-compose.yml) runs `id` with a PostgreSQL (it applies `schema.sql` on first boot and creates a limited app role) and a Redis.
 
-## Architecture
-
-**Why it exists.** The bolha community runs many tools (an editor, design, notes, forges, video…), and each one used to have its own sign-up, its own password and its own queue of accounts to approve. `id` centralizes sign-in on the person's **bolha.us** account: a tool connected to it needs no sign-up of its own, and the approval that already happens on bolha.us is the only one.
-
-**In plain words.** Mastodon knows how to authenticate its accounts, but it doesn't speak the standard sign-in protocol most tools understand (OpenID Connect). `id` is a bridge between the two:
-
-1. the tool sends the person to `id.bolha.us`;
-2. `id` sends the person to `bolha.us`, where they sign in as usual;
-3. `id` checks that the account is approved and active, asks the person's consent the first time, and sends them back to the tool, signed in.
-
-**For the people using it:** one password (the bolha.us one) for every connected tool; no new sign-up or approval wait; a consent page that shows what each tool receives (name, @handle and e-mail); and when an account is suspended on bolha.us, its access to the tools ends too.
-
-**Components.**
-
-```
-                 browser
-                    |
-   +----------------+-----------------+
-   |                                  |
- Tool (relying party)          id.bolha.us  (this app, 2 stateless replicas)
- Penpot, Overleaf, ...          |      |        |
-   |  /token, /userinfo,        |      |        +--> Redis       sessions, codes, tokens,
-   |  /jwks.json (server to     |      |             (hashed, with TTL), status cache
-   |  server)                   |      +----------> PostgreSQL  consents, audit log
-   +--------------------------->|
-                                +--> bolha.us (Mastodon)
-                                      - OAuth: the person signs in, id learns the account id
-                                      - admin API (read-only service token): e-mail,
-                                        role, approved / confirmed / suspended / disabled
+```sh
+cp .env.example .env                 # issuer, instance, the Mastodon app/token, passwords
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out signing-key.pem
+chmod 0444 signing-key.pem           # the container runs nonroot (uid 65532) and must read it
+cp clients.example.json clients.json # register your clients
+docker compose up -d
 ```
 
-- `id` keeps no password and no Mastodon token of the person: the sign-in token is revoked as soon as the account id is known.
-- Tools only receive standard OpenID Connect: an `id_token` signed by `id` (keys published at `/jwks.json`), and claims at `/userinfo`. They key accounts on `sub`, the stable bolha.us account id.
-- Admin rights in a tool come from the `groups` claim, mapped from bolha.us roles by `ID_ROLE_GROUPS` (only listed roles produce a group).
-- At bolha, `id` runs in Kubernetes behind the same edge as the other services (nginx, BunkerWeb, Anubis on the browser pages only).
+It listens on `127.0.0.1:8080`; put your HTTPS reverse proxy in front. Pin the image to a released tag in production (see [Versions](#versions)).
 
-## How it works (protocol detail)
+### Kubernetes
 
-The same flow, step by step, as a tool developer sees it:
+Run the image (`registry.gutocarvalho.net/images/id`) as 2+ replicas (no in-memory state): the clients file in a ConfigMap, the signing key and the secrets (Mastodon app/token, Redis and DB passwords, client secrets) in Secrets, a PostgreSQL and a Redis you provide, behind your ingress with TLS. See [Deploy notes](#deploy-notes) for the specifics.
 
-```
- Tool (RP)             id.bolha.us                          bolha.us (Mastodon)
-    |                       |                                       |
-    |-- /authorize -------->| validate client, exact redirect_uri,  |
-    |   (client_id,         | scope=openid, PKCE, state, nonce      |
-    |    redirect_uri,      |                                       |
-    |    state, nonce,      |-- no session here: /oauth/authorize ->|  person signs in
-    |    code_challenge)    |   (own OAuth app, scope "profile",    |  on the instance
-    |                       |    own state + PKCE, state cookie)    |
-    |                       |<-------------- /callback?code --------|
-    |                       |-- POST /oauth/token ----------------->|
-    |                       |-- GET verify_credentials ------------>|  -> account id
-    |                       |-- POST /oauth/revoke ---------------->|  token dropped
-    |                       |-- GET /api/v1/admin/accounts/:id ---->|  service token:
-    |                       |   approved? confirmed? not suspended? |  e-mail, role,
-    |                       |   not disabled? local?                |  status
-    |                       |   -> session cookie here (2 h)        |
-    |                       |                                       |
-    |                       | consent page (first time per tool)    |
-    |<-- redirect_uri?code&state&iss                                |
-    |                       |                                       |
-    |-- POST /token ------->| client auth, code (60 s, single use), |
-    |   code, verifier      | PKCE check                            |
-    |<-- id_token, access_token (10 min), refresh_token (optional)  |
-    |                       |                                       |
-    |-- GET /userinfo ----->| Bearer access_token -> claims         |
+### From source
+
+```sh
+go build -o id .
 ```
 
-The person's Mastodon token is revoked as soon as the account id is known. The app never holds a token of the person's account.
-
-## Endpoints
-
-| Path | What |
-|---|---|
-| `/.well-known/openid-configuration` | Discovery |
-| `/jwks.json` | Public signing keys |
-| `GET /authorize` | Authorization endpoint, `response_type=code` only |
-| `GET /callback` | Return from the instance (the Mastodon app's redirect URI) |
-| `POST /consent` | The consent form |
-| `POST /token` | `authorization_code` and `refresh_token` grants |
-| `GET, POST /userinfo` | Claims for a Bearer access token |
-| `GET, POST /logout` | `end_session_endpoint` |
-| `/healthz` | Redis and PostgreSQL reachable |
-| `/release-notes`, `/release-notes.json` | From CHANGELOG.md |
-| `/` | A short page about the service, in Portuguese and English |
-
-### Claims
-
-| Claim | Scope | Value |
-|---|---|---|
-| `sub` | always | The Mastodon account id. Stable: the @ can change, the id can't. Tools must key accounts on `sub`, never on the e-mail or the username |
-| `preferred_username`, `name`, `picture`, `profile` | `profile` | Username, display name, avatar URL, profile URL |
-| `email`, `email_verified` | `email` | The account's e-mail; always confirmed, since unconfirmed accounts are refused |
-| `groups`, `role` | `profile` or `groups` | A group name from `ID_ROLE_GROUPS`, keyed by the Mastodon role id (for example `admin`, `moderator`). Roles not in the mapping produce no claim; raw role names are never sent |
-| `auth_time`, `nonce` | `id_token` | When the round trip through the instance happened (see the security notes); the client's nonce |
-| `sid` | `id_token` | The token family: the same for every `id_token` of one sign-in at one client, refreshes included. Sent back as `id_token_hint` at logout |
-
-Supported scopes: `openid` (required), `profile`, `email`, `groups`, `offline_access`. Others are ignored. `prompt=none|login|consent`, `max_age` and `ui_locales` are honored. Request objects are not supported.
+Create the database and apply `schema.sql` as its owner (the app user can't change the schema and can only append to the audit log), provide a Redis with a password, then run `./id` with the variables of `.env.example` set.
 
 ## Configuration
-
 All configuration is in environment variables. See `.env.example`.
 
 | Variable | Required | Default | What |
@@ -185,7 +100,6 @@ All configuration is in environment variables. See `.env.example`.
 Fixed values: authorization code 60 s, access token and `id_token` 10 min, pending sign-in 10 min, account status cache 5 min (1 min on refresh, 1 min for "account doesn't exist"), 30 refreshes per minute per account and client, and 600 per client.
 
 ## Registering a client
-
 Clients are in a JSON file (a ConfigMap in k8s), loaded at startup. See `clients.example.json`.
 
 ```json
@@ -221,7 +135,6 @@ Restart the app (roll the Deployment) after changing the file.
 In the tool, the issuer is `https://id.bolha.us`; most tools only need that, the client id and the secret. Ask for `openid profile email`.
 
 ## Setting up the instance side
-
 ### OAuth application
 
 Register the app the person signs in through. Its only scope is `profile`, so it can read who the person is and nothing else:
@@ -250,8 +163,68 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out signing-key.pe
 
 To rotate: move the current key to `ID_SIGNING_KEY_PREVIOUS`, put a new one in `ID_SIGNING_KEY`, roll the Deployment. Tokens signed with the old key keep verifying. Remove the previous key after a day (clients cache the JWKS; `id_token`s live 10 minutes).
 
-## Database
+## Endpoints
+| Path | What |
+|---|---|
+| `/.well-known/openid-configuration` | Discovery |
+| `/jwks.json` | Public signing keys |
+| `GET /authorize` | Authorization endpoint, `response_type=code` only |
+| `GET /callback` | Return from the instance (the Mastodon app's redirect URI) |
+| `POST /consent` | The consent form |
+| `POST /token` | `authorization_code` and `refresh_token` grants |
+| `GET, POST /userinfo` | Claims for a Bearer access token |
+| `GET, POST /logout` | `end_session_endpoint` |
+| `/healthz` | Redis and PostgreSQL reachable |
+| `/release-notes`, `/release-notes.json` | From CHANGELOG.md |
+| `/` | A short page about the service, in Portuguese and English |
 
+### Claims
+
+| Claim | Scope | Value |
+|---|---|---|
+| `sub` | always | The Mastodon account id. Stable: the @ can change, the id can't. Tools must key accounts on `sub`, never on the e-mail or the username |
+| `preferred_username`, `name`, `picture`, `profile` | `profile` | Username, display name, avatar URL, profile URL |
+| `email`, `email_verified` | `email` | The account's e-mail; always confirmed, since unconfirmed accounts are refused |
+| `groups`, `role` | `profile` or `groups` | A group name from `ID_ROLE_GROUPS`, keyed by the Mastodon role id (for example `admin`, `moderator`). Roles not in the mapping produce no claim; raw role names are never sent |
+| `auth_time`, `nonce` | `id_token` | When the round trip through the instance happened (see the security notes); the client's nonce |
+| `sid` | `id_token` | The token family: the same for every `id_token` of one sign-in at one client, refreshes included. Sent back as `id_token_hint` at logout |
+
+Supported scopes: `openid` (required), `profile`, `email`, `groups`, `offline_access`. Others are ignored. `prompt=none|login|consent`, `max_age` and `ui_locales` are honored. Request objects are not supported.
+
+## How it works (protocol detail)
+The same flow, step by step, as a tool developer sees it:
+
+```
+ Tool (RP)             id.bolha.us                          bolha.us (Mastodon)
+    |                       |                                       |
+    |-- /authorize -------->| validate client, exact redirect_uri,  |
+    |   (client_id,         | scope=openid, PKCE, state, nonce      |
+    |    redirect_uri,      |                                       |
+    |    state, nonce,      |-- no session here: /oauth/authorize ->|  person signs in
+    |    code_challenge)    |   (own OAuth app, scope "profile",    |  on the instance
+    |                       |    own state + PKCE, state cookie)    |
+    |                       |<-------------- /callback?code --------|
+    |                       |-- POST /oauth/token ----------------->|
+    |                       |-- GET verify_credentials ------------>|  -> account id
+    |                       |-- POST /oauth/revoke ---------------->|  token dropped
+    |                       |-- GET /api/v1/admin/accounts/:id ---->|  service token:
+    |                       |   approved? confirmed? not suspended? |  e-mail, role,
+    |                       |   not disabled? local?                |  status
+    |                       |   -> session cookie here (2 h)        |
+    |                       |                                       |
+    |                       | consent page (first time per tool)    |
+    |<-- redirect_uri?code&state&iss                                |
+    |                       |                                       |
+    |-- POST /token ------->| client auth, code (60 s, single use), |
+    |   code, verifier      | PKCE check                            |
+    |<-- id_token, access_token (10 min), refresh_token (optional)  |
+    |                       |                                       |
+    |-- GET /userinfo ----->| Bearer access_token -> claims         |
+```
+
+The person's Mastodon token is revoked as soon as the account id is known. The app never holds a token of the person's account.
+
+## Database
 PostgreSQL holds consents and the audit log; Redis holds everything short-lived (pending requests, sign-ins in progress, sessions, codes, access and refresh tokens, a 5-minute cache of account status). All Redis keys are SHA-256 hashes of the secret values, with a TTL.
 
 Apply the schema as the database owner. The app user can't change the schema and can only add to the audit log:
@@ -270,7 +243,6 @@ Losing Redis signs everyone out of this app and invalidates outstanding tokens a
 `audit_log` has one row per event (fields are stripped of control characters and cut at 200 characters; `/logout` records the client id only when it is a registered client): `login` (a code was issued to a client), `consent`, `deny`, `refused` (with the reason: `suspended`, `disabled`, `unapproved`, `unconfirmed`, `no_email`, `silenced`, `remote`, `gone`), `link` (an existing account in the tool was linked, with its username), `refresh` and `logout`. It holds the account id, username, client id and time. Never tokens, codes, secrets or IPs.
 
 ## Security notes
-
 - Before the client and the exact redirect URI are validated, errors show a page here and never redirect.
 - The authorization request, the sign-in on the instance and the consent are each bound: a random `state` with a `__Host-` cookie for the instance round trip, and the session's CSRF token plus the account id for the consent form, which also requires `Sec-Fetch-Site: same-origin`.
 - Clients with `allow_no_pkce_or_nonce` lose the binding PKCE or a nonce gives between the code and the browser session that started the flow, so they are exposed to authorization code injection (RFC 9700 §4.5): someone who obtains a victim's code could try to redeem it in their own session at that tool. What still limits it: the code is redeemed only with the client's secret, only for the exact registered redirect URI, lives 60 seconds, works once and is bound to that client; and the tool checks `state`. It exists only for legacy RP libraries and should be removed once the tool supports PKCE.
@@ -291,8 +263,78 @@ Losing Redis signs everyone out of this app and invalidates outstanding tokens a
 - `/logout` only ends the session (and revokes the account's tokens) when the request proves it: an `id_token_hint` issued to this session, or the person confirming on a page here (same-origin POST with the session's CSRF token). A plain link from another site only shows the confirmation page, so it can't sign anyone out.
 - Logging out here doesn't end the tools' own sessions; it does revoke the account's tokens issued here.
 
-## Versions
+## Architecture
+**Why it exists.** The bolha community runs many tools (an editor, design, notes, forges, video…), and each one used to have its own sign-up, its own password and its own queue of accounts to approve. `id` centralizes sign-in on the person's **bolha.us** account: a tool connected to it needs no sign-up of its own, and the approval that already happens on bolha.us is the only one.
 
+**In plain words.** Mastodon knows how to authenticate its accounts, but it doesn't speak the standard sign-in protocol most tools understand (OpenID Connect). `id` is a bridge between the two:
+
+1. the tool sends the person to `id.bolha.us`;
+2. `id` sends the person to `bolha.us`, where they sign in as usual;
+3. `id` checks that the account is approved and active, asks the person's consent the first time, and sends them back to the tool, signed in.
+
+**For the people using it:** one password (the bolha.us one) for every connected tool; no new sign-up or approval wait; a consent page that shows what each tool receives (name, @handle and e-mail); and when an account is suspended on bolha.us, its access to the tools ends too.
+
+**Components.**
+
+```
+                 browser
+                    |
+   +----------------+-----------------+
+   |                                  |
+ Tool (relying party)          id.bolha.us  (this app, 2 stateless replicas)
+ Penpot, Overleaf, ...          |      |        |
+   |  /token, /userinfo,        |      |        +--> Redis       sessions, codes, tokens,
+   |  /jwks.json (server to     |      |             (hashed, with TTL), status cache
+   |  server)                   |      +----------> PostgreSQL  consents, audit log
+   +--------------------------->|
+                                +--> bolha.us (Mastodon)
+                                      - OAuth: the person signs in, id learns the account id
+                                      - admin API (read-only service token): e-mail,
+                                        role, approved / confirmed / suspended / disabled
+```
+
+- `id` keeps no password and no Mastodon token of the person: the sign-in token is revoked as soon as the account id is known.
+- Tools only receive standard OpenID Connect: an `id_token` signed by `id` (keys published at `/jwks.json`), and claims at `/userinfo`. They key accounts on `sub`, the stable bolha.us account id.
+- Admin rights in a tool come from the `groups` claim, mapped from bolha.us roles by `ID_ROLE_GROUPS` (only listed roles produce a group).
+- At bolha, `id` runs in Kubernetes behind the same edge as the other services (nginx, BunkerWeb, Anubis on the browser pages only).
+
+## Testing and security
+This app decides who gets into other tools, so it is tested and reviewed as a security component. What is done today (2026-11-06):
+
+**Every pipeline.** GitLab CI ([`.gitlab-ci.yml`](.gitlab-ci.yml), plus the shared security stage from `open/gcn/ci-templates`, file `security.yml`) runs on every push. The test job runs on every pipeline; the security stage runs on every merge request and every push to `main`; the image is built and published only from `main`.
+
+- Blocking (the pipeline fails and no image is published):
+  - `go vet`, a `gofmt` check, and the full test suite against real PostgreSQL 17 and Redis 7.4 services;
+  - `govulncheck`: known vulnerabilities in Go code paths this app actually reaches;
+  - `gitleaks`: secrets committed to the repository;
+  - `trivy`: critical vulnerabilities that have a fix, secrets and misconfigurations in the repository.
+- Informative (reported, not blocking): `semgrep`, `gosec`, `hadolint` (Dockerfile), `yamllint`, and `poutine` (security of the CI pipeline itself). At 0.1.0 they report nothing at the thresholds the pipeline uses; the few `gosec`/`semgrep` false positives are annotated in the code with the reason.
+
+**The test suite.** 51 tests, all run with the race detector (`go test -race`). Most run the real HTTP handlers end to end against a fake Mastodon server, PostgreSQL and Redis:
+
+- the full OpenID Connect flow: authorize, sign-in on the instance, consent, token, `id_token` signature checked against the published JWKS, userinfo, and that the person's Mastodon token is revoked;
+- redirect URIs: exact match only, and errors before validation never redirect;
+- PKCE (S256 only, exact length, wrong or missing verifier), client authentication (wrong secret, another client's code, both methods at once), single-use codes;
+- consent and sign-out forms: CSRF token, same-origin check, form reused from another browser;
+- account status: suspended, disabled, unapproved, unconfirmed, remote, deleted and silenced accounts, at sign-in, refresh and userinfo;
+- token families: replayed codes and refresh tokens revoke their family, sign-out revokes the account's tokens, a hint-only sign-out revokes only its own family, rotation that fails halfway keeps the old token;
+- rate limits and failures of the instance or of Redis (the refresh token survives, the limiter doesn't fail open, concurrent lookups share one admin call);
+- signing keys: rotation, forged payloads, `alg: none`, short keys; configuration and clients-file validation; translations; release notes.
+
+**Reviews before the first release.** An independent security code review against OpenID Connect Core, the OAuth 2.0 Security Best Current Practice (RFC 9700) and OWASP ASVS; two automated white-box penetration test runs with [Strix](https://github.com/usestrix/strix); and an automated review of each security-relevant commit. Every finding was fixed with a regression test (most are in `security_test.go`). The fixes are listed in the 0.1.0 entry of the [CHANGELOG](CHANGELOG.md) and in the commit history. These were done by the project, not by an outside auditor, and they don't certify anything: they are what we checked.
+
+**Reporting a vulnerability.** Write to contato@gutocarvalho.net. Please don't open a public issue for it.
+
+## Deploy notes
+- Run 2 or more replicas: there is no in-memory state.
+- Mount the clients file (ConfigMap) and the signing key (Secret, via `ID_SIGNING_KEY_FILE`); put the Mastodon secrets, the admin token, the Redis password and client secrets in Secrets.
+- Redis: password on, `maxmemory` with `noeviction` (or `volatile-ttl`) and a memory alert, and a NetworkPolicy so only the id pods reach it.
+- PostgreSQL over TLS (`ID_DB_SSLMODE=require`, the default).
+- The container listens on `:8080`, runs as nonroot on distroless, and has `/id -healthcheck` for Docker. In k8s, probe `GET /healthz`.
+- Serve it over HTTPS at the issuer URL. The cookies are `Secure` with the `__Host-` prefix.
+- At the edge: rate limit `/authorize`, `/callback`, `/token` and `/userinfo`. A JavaScript challenge (Anubis) must not cover `/token`, `/userinfo`, `/jwks.json` or `/.well-known/`: tools call them server-to-server.
+
+## Versions
 Versions look like `X.Y.Z-BUILD`. `X.Y.Z` is in the `VERSION` file and follows SemVer, and `BUILD` is the GitLab pipeline number. A local build shows `X.Y.Z-dev`. The page footer shows the version.
 
 What changed in each version is in [CHANGELOG.md](CHANGELOG.md), served as `/release-notes` and `/release-notes.json`. Add an entry when you bump `VERSION`: a test fails without it.
@@ -303,18 +345,7 @@ What changed in each version is in [CHANGELOG.md](CHANGELOG.md), served as `/rel
 | `X.Y.Z` | On each build of that version. |
 | `latest` | On each build. |
 
-## Deploy notes
-
-- Run 2 or more replicas: there is no in-memory state.
-- Mount the clients file (ConfigMap) and the signing key (Secret, via `ID_SIGNING_KEY_FILE`); put the Mastodon secrets, the admin token, the Redis password and client secrets in Secrets.
-- Redis: password on, `maxmemory` with `noeviction` (or `volatile-ttl`) and a memory alert, and a NetworkPolicy so only the id pods reach it.
-- PostgreSQL over TLS (`ID_DB_SSLMODE=require`, the default).
-- The container listens on `:8080`, runs as nonroot on distroless, and has `/id -healthcheck` for Docker. In k8s, probe `GET /healthz`.
-- Serve it over HTTPS at the issuer URL. The cookies are `Secure` with the `__Host-` prefix.
-- At the edge: rate limit `/authorize`, `/callback`, `/token` and `/userinfo`. A JavaScript challenge (Anubis) must not cover `/token`, `/userinfo`, `/jwks.json` or `/.well-known/`: tools call them server-to-server.
-
 ## Development
-
 ```sh
 go vet ./... && gofmt -l .
 go test ./...    # unit tests; the flow tests skip without a database
@@ -336,9 +367,7 @@ The tests delete data: they only accept a database whose name ends in `_test`, a
 [AGENTS.md](AGENTS.md) is the guide for changing the code, for people and for coding agents (Claude Code, Codex, Cursor and others read it): the exact test commands, a map of the files and their tests, and the rules a change must keep (exact redirect URIs, single-use bound codes, token families, which accounts may sign in, CSRF, CSP, both languages), each with the test that guards it. `CLAUDE.md` only points to it.
 
 ## License
-
 AGPL-3.0, see [LICENSE](LICENSE).
 
 ## Bot account
-
 The app's account on bolha.us, @identifica, is marked as a bot and uses [`docs/bot-avatar.png`](docs/bot-avatar.png) as its avatar, in the style of the other bolha.us bots.
